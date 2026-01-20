@@ -6,8 +6,6 @@
     <title>Business Expense Report</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.5.31/jspdf.plugin.autotable.min.js"></script>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.css">
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/cropperjs/1.6.1/cropper.min.js"></script>
     <script async src="https://docs.opencv.org/4.5.2/opencv.js" onload="onOpenCvReady()"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script>
@@ -339,7 +337,7 @@
             top: 0;
             width: 100%;
             height: 100%;
-            background-color: rgba(0,0,0,0.95);
+            background-color: rgba(0,0,0,0.7);
             overflow: auto;
         }
 
@@ -570,7 +568,6 @@
             <div class="crop-controls">
                 <button class="btn btn-success" onclick="togglePerspectiveMode()">📐 Straighten Receipt</button>
                 <button class="btn btn-rotate" onclick="rotateCropImage(90)">↷ Rotate Right 90°</button>
-                <button class="btn btn-secondary" onclick="resetCrop()">↺ Reset</button>
             </div>
 
             <div id="statusMessage" style="display:none; margin-top: 10px; padding: 10px; background: #fff3cd; border-radius: 6px; color: #856404; text-align: center; font-weight: 600;"></div>
@@ -590,7 +587,6 @@
     <script>
         let expenses = [];
         let receiptImages = {}; // Store receipt images by expense ID
-        let cropper = null; // Cropper.js instance
         let currentCropExpenseId = null; // Track which expense is being edited
         let perspectiveMode = false; // Track if in perspective correction mode
         let corners = []; // Store corner points for perspective correction
@@ -894,6 +890,11 @@
             // Set today's date for new expense
             const newExpense = document.getElementById(`expense-${expenseId}`);
             newExpense.querySelector('.expense-date').valueAsDate = new Date();
+            
+            // Scroll to show the new expense (smooth scroll into view)
+            setTimeout(() => {
+                newExpense.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }, 100);
         }
 
         function removeExpense(id) {
@@ -993,40 +994,10 @@
             cropImage.src = receiptImages[expenseId];
 
             document.getElementById('cropModal').classList.add('show');
-
-            // Destroy existing cropper if any
-            if (cropper) {
-                cropper.destroy();
-            }
-
-            // Initialize cropper with better zoom and pan controls
-            cropper = new Cropper(cropImage, {
-                viewMode: 0,
-                dragMode: 'move',
-                aspectRatio: NaN, // Free aspect ratio
-                autoCropArea: 0.8,
-                restore: false,
-                guides: true,
-                center: true,
-                highlight: false,
-                cropBoxMovable: true,
-                cropBoxResizable: true,
-                toggleDragModeOnDblclick: false,
-                zoomable: true,
-                zoomOnWheel: true,
-                zoomOnTouch: true,
-                wheelZoomRatio: 0.1,
-                minContainerWidth: 200,
-                minContainerHeight: 200,
-            });
         }
 
         function closeCropModal() {
             document.getElementById('cropModal').classList.remove('show');
-            if (cropper) {
-                cropper.destroy();
-                cropper = null;
-            }
             // Reset perspective mode
             if (perspectiveMode) {
                 cancelPerspectiveMode();
@@ -1035,39 +1006,57 @@
         }
 
         function rotateCropImage(degrees) {
-            if (cropper) {
-                cropper.rotate(degrees);
-            }
+            const cropImage = document.getElementById('cropImage');
+            const canvas = document.createElement('canvas');
+            const ctx = canvas.getContext('2d');
+            
+            const img = new Image();
+            img.onload = function() {
+                // Swap width and height for 90/270 degree rotations
+                if (degrees === 90 || degrees === 270) {
+                    canvas.width = img.height;
+                    canvas.height = img.width;
+                } else {
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                }
+                
+                ctx.translate(canvas.width / 2, canvas.height / 2);
+                ctx.rotate(degrees * Math.PI / 180);
+                ctx.drawImage(img, -img.width / 2, -img.height / 2);
+                
+                const rotatedImage = canvas.toDataURL('image/jpeg', 0.9);
+                cropImage.src = rotatedImage;
+                receiptImages[currentCropExpenseId] = rotatedImage;
+                
+                // Update preview
+                const preview = document.getElementById(`preview-${currentCropExpenseId}`);
+                if (preview) {
+                    preview.innerHTML = `<img src="${rotatedImage}" alt="Receipt" style="cursor: pointer;">`;
+                    preview.querySelector('img').addEventListener('click', function(e) {
+                        showReceiptModal(rotatedImage, e);
+                    });
+                }
+                
+                saveData();
+            };
+            img.src = cropImage.src;
         }
 
         function resetCrop() {
-            if (cropper) {
-                cropper.reset();
-            }
+            // No longer needed - removed
         }
 
         function zoomIn() {
-            if (cropper) {
-                cropper.zoom(0.1);
-            }
+            // No longer needed - removed
         }
 
         function zoomOut() {
-            if (cropper) {
-                cropper.zoom(-0.1);
-            }
+            // No longer needed - removed
         }
 
         function togglePerspectiveMode() {
-            if (!cropper) {
-                showStatus('❌ No image loaded', 'error');
-                return;
-            }
-
             perspectiveMode = true;
-            
-            // Disable cropper
-            cropper.disable();
             
             // Get the image
             const cropImage = document.getElementById('cropImage');
@@ -1631,16 +1620,6 @@
             canvas.style.pointerEvents = 'none';
             
             document.getElementById('perspectiveControls').style.display = 'none';
-            
-            if (cropper) {
-                cropper.enable();
-            }
-        }
-
-        function resetCrop() {
-            if (cropper) {
-                cropper.reset();
-            }
         }
 
         function calculateTotal() {
