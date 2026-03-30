@@ -65,6 +65,30 @@
                 mLink.rel = 'manifest';
                 mLink.href = URL.createObjectURL(blob);
                 document.head.appendChild(mLink);
+
+                // ── Service Worker registration ──────────────────────
+                if ('serviceWorker' in navigator) {
+                    navigator.serviceWorker.register('./sw.js')
+                        .then(reg => {
+                            // When a new SW is waiting, reload immediately to apply it
+                            reg.addEventListener('updatefound', () => {
+                                const newWorker = reg.installing;
+                                newWorker.addEventListener('statechange', () => {
+                                    if (newWorker.state === 'installed' && navigator.serviceWorker.controller) {
+                                        // New version cached — reload to activate
+                                        newWorker.postMessage({ type: 'SKIP_WAITING' });
+                                    }
+                                });
+                            });
+                        })
+                        .catch(err => console.warn('SW registration failed:', err));
+
+                    // When controller changes (new SW took over), reload once
+                    let refreshing = false;
+                    navigator.serviceWorker.addEventListener('controllerchange', () => {
+                        if (!refreshing) { refreshing = true; window.location.reload(); }
+                    });
+                }
             });
         })();
     </script>
@@ -81,930 +105,782 @@
         }
     </script>
     <style>
-        /* ── Design Tokens ─────────────────────────────────────────────── */
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap');
+        @import url('https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
 
         :root {
-            --navy:       #0f1f3d;
-            --navy-mid:   #1a3260;
-            --blue:       #2563eb;
-            --blue-light: #3b82f6;
-            --blue-pale:  #eff6ff;
-            --teal:       #0891b2;
+            --bg:         #f2f0eb;
+            --surface:    #ffffff;
+            --surface-2:  #faf9f7;
+            --surface-3:  #f0ede8;
+            --void:       #1a1714;
+            --coal:       #2c2825;
+            --ink:        #3d3835;
+            --ash:        #7a7570;
+            --fog:        #b0aaa5;
+            --border:     #e5e1db;
+            --border-2:   #ccc8c2;
+            --amber:      #c9850a;
+            --amber-lt:   #e8a020;
+            --amber-pale: #fdf8f0;
+            --amber-dim:  #faebd2;
+            --teal:       #0d9488;
             --green:      #16a34a;
             --green-pale: #f0fdf4;
             --red:        #dc2626;
             --red-pale:   #fef2f2;
-            --amber:      #d97706;
-            --surface:    #ffffff;
-            --surface-2:  #f8fafc;
-            --surface-3:  #f1f5f9;
-            --border:     #e2e8f0;
-            --border-mid: #cbd5e1;
-            --text-1:     #0f172a;
-            --text-2:     #475569;
-            --text-3:     #94a3b8;
-            --radius-sm:  6px;
-            --radius:     10px;
-            --radius-lg:  14px;
-            --shadow-sm:  0 1px 3px rgba(0,0,0,0.08), 0 1px 2px rgba(0,0,0,0.06);
-            --shadow:     0 4px 12px rgba(0,0,0,0.08), 0 2px 4px rgba(0,0,0,0.05);
-            --shadow-lg:  0 12px 32px rgba(0,0,0,0.12), 0 4px 8px rgba(0,0,0,0.06);
+            --blue:       #2563eb;
+            --blue-pale:  #eff6ff;
+            --r-sm: 7px;
+            --r:    12px;
+            --r-lg: 16px;
+            --r-xl: 22px;
+            --sh-sm: 0 1px 3px rgba(0,0,0,0.07), 0 1px 2px rgba(0,0,0,0.04);
+            --sh:    0 4px 16px rgba(0,0,0,0.08), 0 1px 4px rgba(0,0,0,0.04);
+            --sh-lg: 0 16px 48px rgba(0,0,0,0.14), 0 4px 12px rgba(0,0,0,0.06);
+            --nav-h: 70px;
         }
 
-        /* ── Reset ──────────────────────────────────────────────────────── */
         *, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
 
-        /* ── Base ───────────────────────────────────────────────────────── */
         body {
-            font-family: 'DM Sans', system-ui, sans-serif;
-            background: var(--surface-3);
+            font-family: 'Outfit', system-ui, sans-serif;
+            background: var(--bg);
             min-height: 100vh;
-            padding: 16px;
-            color: var(--text-1);
+            color: var(--void);
             -webkit-font-smoothing: antialiased;
+            overscroll-behavior: none;
         }
 
-        /* ── Shell ──────────────────────────────────────────────────────── */
-        .container {
-            max-width: 860px;
+        /* ── App Shell ────────────────────────────────── */
+        .app-shell {
+            max-width: 520px;
             margin: 0 auto;
-            background: var(--surface);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-            overflow: hidden;
-        }
-
-        /* ── Header ─────────────────────────────────────────────────────── */
-        .header {
-            background: var(--navy);
-            padding: 28px 32px 24px;
-            text-align: center;
-            position: relative;
-        }
-
-        .header::after {
-            content: '';
-            position: absolute;
-            bottom: 0; left: 0; right: 0;
-            height: 3px;
-            background: linear-gradient(90deg, var(--blue), var(--teal));
-        }
-
-        .logo-container { margin-bottom: 10px; }
-        .logo-container img { height: 52px; width: auto; }
-
-        .logo-container h2 {
-            font-family: 'DM Mono', monospace !important;
-            font-size: 22px !important;
-            font-weight: 500 !important;
-            color: #ffffff !important;
-            letter-spacing: 4px !important;
-            margin: 0 !important;
-        }
-
-        .header h1 {
-            font-size: 13px;
-            font-weight: 500;
-            color: rgba(255,255,255,0.55);
-            letter-spacing: 2.5px;
-            text-transform: uppercase;
-            margin-top: 6px;
-        }
-
-        .header p { display: none; }
-
-        /* ── Content ────────────────────────────────────────────────────── */
-        .content { padding: 24px 28px 32px; }
-
-        /* ── Section cards ──────────────────────────────────────────────── */
-        .section {
-            background: var(--surface);
-            border: 1px solid var(--border);
-            border-radius: var(--radius-lg);
-            padding: 22px 24px;
-            margin-bottom: 16px;
-            position: relative;
-        }
-
-        .section::before {
-            content: '';
-            position: absolute;
-            left: 0; top: 16px; bottom: 16px;
-            width: 3px;
-            background: linear-gradient(180deg, var(--blue), var(--teal));
-            border-radius: 0 3px 3px 0;
-        }
-
-        .section:last-child { border-bottom: 1px solid var(--border); }
-
-        .section-title {
-            font-size: 13px;
-            font-weight: 700;
-            color: var(--text-2);
-            letter-spacing: 1.5px;
-            text-transform: uppercase;
-            margin-bottom: 18px;
-            display: flex;
-            align-items: center;
-            gap: 8px;
-        }
-
-        .section-title::after {
-            content: '';
-            flex: 1;
-            height: 1px;
-            background: var(--border);
-        }
-
-        /* ── Form ───────────────────────────────────────────────────────── */
-        .form-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
-            gap: 16px;
-        }
-
-        .form-group {
+            min-height: 100vh;
             display: flex;
             flex-direction: column;
-            gap: 6px;
+            position: relative;
         }
 
-        label {
-            font-size: 11px;
-            font-weight: 700;
-            color: var(--text-2);
-            letter-spacing: 0.8px;
+        /* ── Header ───────────────────────────────────── */
+        .app-header {
+            background: var(--void);
+            padding: 16px 20px 14px;
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+        }
+
+        .app-header-brand { display: flex; flex-direction: column; }
+
+        .app-header-logo {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--amber-lt);
+            letter-spacing: 3px;
             text-transform: uppercase;
+            line-height: 1;
+        }
+
+        .app-header-sub {
+            font-size: 9px;
+            font-weight: 500;
+            color: rgba(255,255,255,0.3);
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            margin-top: 4px;
+        }
+
+        .app-header-right { display: flex; align-items: center; gap: 8px; }
+
+        .header-sync-dot {
+            width: 7px; height: 7px;
+            border-radius: 50%;
+            background: var(--fog);
+            transition: background 0.3s;
+            flex-shrink: 0;
+        }
+        .header-sync-dot.ok     { background: var(--green); box-shadow: 0 0 6px rgba(22,163,74,0.5); }
+        .header-sync-dot.warn   { background: var(--amber-lt); }
+        .header-sync-dot.syncing { background: #60a5fa; animation: pulse-dot 1s infinite; }
+
+        @keyframes pulse-dot { 0%,100%{opacity:1} 50%{opacity:.35} }
+
+        .header-adv-btn {
+            background: rgba(255,255,255,0.08);
+            border: 1px solid rgba(255,255,255,0.1);
+            color: rgba(255,255,255,0.6);
+            border-radius: var(--r-sm);
+            padding: 6px 12px;
+            font-size: 11px;
+            font-family: 'Outfit', sans-serif;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.15s;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+        .header-adv-btn:hover { background: rgba(255,255,255,0.14); color: white; }
+
+        /* ── Bottom Tab Nav ───────────────────────────── */
+        .tab-nav {
+            position: fixed;
+            bottom: 0; left: 50%;
+            transform: translateX(-50%);
+            width: 100%; max-width: 520px;
+            background: var(--void);
+            display: flex;
+            z-index: 200;
+            padding-bottom: env(safe-area-inset-bottom, 0px);
+            border-top: 1px solid rgba(255,255,255,0.07);
+        }
+
+        .tab-btn {
+            flex: 1;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 3px; padding: 10px 4px 12px;
+            background: none; border: none; cursor: pointer;
+            color: rgba(255,255,255,0.3);
+            font-family: 'Outfit', sans-serif;
+            font-size: 9px; font-weight: 700;
+            letter-spacing: 1px; text-transform: uppercase;
+            transition: color 0.2s;
+            position: relative;
+        }
+
+        .tab-btn::after {
+            content: '';
+            position: absolute;
+            top: 0; left: 22%; right: 22%;
+            height: 2px;
+            background: var(--amber-lt);
+            border-radius: 0 0 3px 3px;
+            transform: scaleX(0);
+            transition: transform 0.25s cubic-bezier(0.34, 1.56, 0.64, 1);
+        }
+
+        .tab-btn.active { color: var(--amber-lt); }
+        .tab-btn.active::after { transform: scaleX(1); }
+        .tab-icon { font-size: 19px; line-height: 1; }
+
+        /* Badge on tab */
+        .tab-badge {
+            position: absolute; top: 7px; right: calc(22% - 4px);
+            background: var(--amber); color: white;
+            font-size: 8px; font-weight: 700;
+            width: 14px; height: 14px; border-radius: 50%;
+            display: flex; align-items: center; justify-content: center;
+            font-family: 'JetBrains Mono', monospace;
+        }
+
+        /* ── Tab Content Area ─────────────────────────── */
+        .tab-content {
+            flex: 1;
+            padding: 14px 14px calc(var(--nav-h) + 14px);
+            overflow-y: auto;
+            -webkit-overflow-scrolling: touch;
+        }
+
+        .tab-panel { display: none; animation: tab-in 0.22s ease; }
+        .tab-panel.active { display: block; }
+        @keyframes tab-in { from{opacity:0;transform:translateY(6px)} to{opacity:1;transform:translateY(0)} }
+
+        /* ── Cards ────────────────────────────────────── */
+        .card {
+            background: var(--surface);
+            border-radius: var(--r-lg);
+            box-shadow: var(--sh-sm);
+            padding: 18px 18px 20px;
+            margin-bottom: 12px;
+            border: 1px solid var(--border);
+        }
+
+        .card-title {
+            font-size: 9px; font-weight: 800;
+            color: var(--fog);
+            letter-spacing: 2px; text-transform: uppercase;
+            margin-bottom: 16px;
+            display: flex; align-items: center; gap: 8px;
+        }
+        .card-title::after { content:''; flex:1; height:1px; background:var(--border); }
+        .card-icon { font-size: 14px; }
+
+        /* ── Form ─────────────────────────────────────── */
+        .form-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 13px;
+        }
+
+        .form-group { display: flex; flex-direction: column; gap: 5px; }
+
+        label {
+            font-size: 9px; font-weight: 700;
+            color: var(--ash);
+            letter-spacing: 1px; text-transform: uppercase;
         }
 
         input, select, textarea {
-            padding: 10px 13px;
+            padding: 10px 12px;
             border: 1.5px solid var(--border);
-            border-radius: var(--radius-sm);
+            border-radius: var(--r-sm);
             font-size: 14px;
-            font-family: 'DM Sans', sans-serif;
-            color: var(--text-1);
+            font-family: 'Outfit', sans-serif;
+            color: var(--void);
             background: var(--surface);
             transition: border-color 0.15s, box-shadow 0.15s;
+            -webkit-appearance: none;
         }
 
         input:focus, select:focus, textarea:focus {
             outline: none;
-            border-color: var(--blue);
-            box-shadow: 0 0 0 3px rgba(37,99,235,0.1);
+            border-color: var(--amber);
+            box-shadow: 0 0 0 3px rgba(201,133,10,0.12);
         }
 
-        input[readonly] {
-            background: var(--surface-2);
-            color: var(--text-2);
-        }
+        input[readonly] { background: var(--surface-2); color: var(--ink); }
 
         select {
             appearance: none;
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='11' height='11' viewBox='0 0 24 24' fill='none' stroke='%23b0aaa5' stroke-width='2.5'%3E%3Cpolyline points='6 9 12 15 18 9'%3E%3C/polyline%3E%3C/svg%3E");
             background-repeat: no-repeat;
             background-position: right 11px center;
-            padding-right: 32px;
+            padding-right: 30px;
         }
 
         input[type="file"] { padding: 8px; font-size: 12px; }
 
-        /* ── Mileage block ──────────────────────────────────────────────── */
+        /* ── Mileage ──────────────────────────────────── */
         .mileage-calc {
-            background: var(--blue-pale);
-            border: 1.5px solid #bfdbfe;
-            padding: 16px;
-            border-radius: var(--radius);
+            background: var(--amber-pale);
+            border: 1.5px solid var(--amber-dim);
+            padding: 14px;
+            border-radius: var(--r);
         }
+        .mileage-calc label { color: var(--amber); }
+        .mileage-calc input:focus { border-color: var(--amber); }
+        #mileageTotal { font-family: 'JetBrains Mono', monospace; font-weight: 600; }
 
-        .mileage-calc label { color: var(--blue); }
+        /* ── Expense List ─────────────────────────────── */
+        .expense-list { display: flex; flex-direction: column; gap: 10px; overflow: hidden; }
 
-        /* ── Expense list ───────────────────────────────────────────────── */
-        .expense-list {
-            max-height: 420px;
-            overflow-y: auto;
-            border: 1.5px solid var(--border-mid);
-            border-radius: var(--radius);
-            padding: 10px;
-            background: var(--surface-2);
-            scrollbar-width: thin;
-            scrollbar-color: var(--border-mid) transparent;
-        }
-
-        .expense-list:empty { display: none; }
-
-        .expense-list::-webkit-scrollbar { width: 5px; }
-        .expense-list::-webkit-scrollbar-track { background: transparent; }
-        .expense-list::-webkit-scrollbar-thumb { background: var(--border-mid); border-radius: 99px; }
-
-        /* ── Expense entry ──────────────────────────────────────────────── */
+        /* ── Expense Entry ────────────────────────────── */
         .expense-entry {
-            background: var(--surface);
+            background: var(--surface-2);
             border: 1.5px solid var(--border);
-            border-radius: var(--radius);
-            padding: 16px;
-            margin-bottom: 10px;
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
-            gap: 12px;
-            align-items: end;
+            border-radius: var(--r);
+            padding: 14px 12px;
             transition: border-color 0.15s, box-shadow 0.15s;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            overflow: hidden;
+            box-sizing: border-box;
+            width: 100%;
+        }
+        .expense-entry:hover { border-color: var(--amber); box-shadow: var(--sh-sm); }
+
+        .expense-fields {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 8px;
+            min-width: 0;
+        }
+        @media (min-width: 600px) {
+            .expense-fields { grid-template-columns: repeat(4, 1fr); }
+        }
+        .expense-entry .form-group { margin: 0; gap: 4px; min-width: 0; }
+        .expense-entry input, .expense-entry select {
+            min-width: 0; width: 100%; box-sizing: border-box;
         }
 
-        .expense-entry:hover {
-            border-color: var(--blue-light);
-            box-shadow: var(--shadow-sm);
+        .expense-btns { display: flex; flex-direction: column; gap: 6px; min-width: 0; }
+        .expense-btns-row { display: flex; gap: 6px; min-width: 0; }
+        .expense-btns-row .btn {
+            flex: 1; min-width: 0;
+            font-size: 11px; padding: 8px 4px;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
         }
 
-        .expense-entry:last-child { margin-bottom: 0; }
-        .expense-entry .form-group { margin: 0; gap: 5px; }
-
-        /* Sequence badge */
         .expense-seq-num {
-            position: absolute;
-            top: 0; right: 0;
-            background: var(--navy);
-            color: white;
-            font-size: 10px;
-            font-weight: 700;
-            font-family: 'DM Mono', monospace;
-            padding: 2px 7px;
-            border-radius: 0 var(--radius-sm) 0 var(--radius-sm);
-            line-height: 1.8;
+            position: absolute; top: 0; right: 0;
+            background: var(--void); color: var(--amber-lt);
+            font-size: 9px; font-weight: 600;
+            font-family: 'JetBrains Mono', monospace;
+            padding: 2px 8px;
+            border-radius: 0 var(--r-sm) 0 var(--r-sm);
+            line-height: 1.9;
         }
 
-        /* ── Receipt ────────────────────────────────────────────────────── */
-        .receipt-buttons {
-            display: flex;
-            gap: 6px;
-            flex-wrap: wrap;
-            margin-bottom: 8px;
-        }
-
-        .receipt-preview { margin-top: 6px; }
-
+        /* ── Receipt ──────────────────────────────────── */
+        .receipt-preview { min-width: 0; }
         .receipt-preview img {
-            max-width: 90px;
-            max-height: 90px;
-            border-radius: var(--radius-sm);
+            width: 168px; height: 168px;
+            max-width: 100%;
+            object-fit: contain;
+            background: var(--surface-3);
+            border-radius: var(--r-sm);
             border: 1.5px solid var(--border);
+            cursor: pointer; display: block;
+            transition: transform 0.15s;
+        }
+        .receipt-preview img:hover { transform: scale(1.03); }
+
+        /* ── Add Expense Button ───────────────────────── */
+        .add-expense-btn {
+            width: 100%; margin-top: 6px;
+            padding: 13px;
+            background: none;
+            border: 2px dashed var(--border-2);
+            border-radius: var(--r);
+            color: var(--ash);
+            font-family: 'Outfit', sans-serif;
+            font-size: 13px; font-weight: 600;
             cursor: pointer;
-            transition: transform 0.15s, box-shadow 0.15s;
+            transition: all 0.15s;
+            letter-spacing: 0.3px;
         }
+        .add-expense-btn:hover { border-color: var(--amber); color: var(--amber); background: var(--amber-pale); }
 
-        .receipt-preview img:hover {
-            transform: scale(1.06);
-            box-shadow: var(--shadow);
-        }
-
-        /* ── Total ──────────────────────────────────────────────────────── */
+        /* ── Total Banner ─────────────────────────────── */
         .total-section {
-            background: var(--navy);
-            color: white;
-            padding: 22px 28px;
-            border-radius: var(--radius-lg);
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            margin-top: 8px;
-            margin-bottom: 4px;
+            background: var(--void);
+            border-radius: var(--r-lg);
+            padding: 18px 22px;
+            display: flex; align-items: center; justify-content: space-between;
+            margin-bottom: 12px;
+            position: relative; overflow: hidden;
         }
-
+        .total-section::before {
+            content: '';
+            position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+            background: linear-gradient(180deg, var(--amber-lt), var(--amber));
+        }
         .total-section h3 {
-            font-size: 12px;
-            font-weight: 700;
-            letter-spacing: 2px;
-            text-transform: uppercase;
-            color: rgba(255,255,255,0.6);
-            margin-bottom: 0;
+            font-size: 9px; font-weight: 800;
+            letter-spacing: 2px; text-transform: uppercase;
+            color: rgba(255,255,255,0.35);
+        }
+        .amount {
+            font-family: 'JetBrains Mono', monospace;
+            font-size: 28px; font-weight: 600;
+            color: var(--amber-lt);
+            letter-spacing: -0.5px;
         }
 
-        .total-section .amount {
-            font-family: 'DM Mono', monospace;
-            font-size: 32px;
-            font-weight: 500;
-            letter-spacing: -1px;
-        }
-
-        /* ── Buttons ────────────────────────────────────────────────────── */
+        /* ── Buttons ──────────────────────────────────── */
         .btn {
-            padding: 11px 20px;
+            padding: 11px 18px;
             border: none;
-            border-radius: var(--radius-sm);
-            font-size: 13px;
-            font-weight: 600;
-            font-family: 'DM Sans', sans-serif;
+            border-radius: var(--r-sm);
+            font-size: 13px; font-weight: 600;
+            font-family: 'Outfit', sans-serif;
             cursor: pointer;
             transition: all 0.15s;
             letter-spacing: 0.3px;
             white-space: nowrap;
+            display: inline-flex; align-items: center; justify-content: center; gap: 6px;
         }
-
         .btn:active { transform: scale(0.97); }
 
-        .btn-primary {
-            background: var(--blue);
-            color: white;
-        }
-        .btn-primary:hover { background: #1d4ed8; box-shadow: 0 4px 12px rgba(37,99,235,0.35); }
+        .btn-primary { background: var(--amber); color: white; }
+        .btn-primary:hover { background: var(--amber-lt); box-shadow: 0 4px 14px rgba(201,133,10,0.35); }
 
-        .btn-secondary {
-            background: var(--surface-3);
-            color: var(--text-2);
-            border: 1.5px solid var(--border);
-        }
-        .btn-secondary:hover { background: var(--border); color: var(--text-1); }
+        .btn-secondary { background: var(--surface-3); color: var(--ink); border: 1.5px solid var(--border); }
+        .btn-secondary:hover { background: var(--border); color: var(--void); }
 
-        .btn-danger {
-            background: var(--red-pale);
-            color: var(--red);
-            border: 1.5px solid #fecaca;
-            padding: 8px 14px;
-            font-size: 12px;
-        }
+        .btn-danger { background: var(--red-pale); color: var(--red); border: 1.5px solid #fecaca; padding: 8px 14px; font-size: 12px; }
         .btn-danger:hover { background: var(--red); color: white; border-color: var(--red); }
 
-        .btn-success {
-            background: var(--green);
-            color: white;
-        }
+        .btn-success { background: var(--green); color: white; }
         .btn-success:hover { background: #15803d; box-shadow: 0 4px 12px rgba(22,163,74,0.35); }
 
-        .btn-rotate {
-            background: #0e7490;
-            color: white;
-        }
-        .btn-rotate:hover { background: #0891b2; }
+        .btn-rotate { background: var(--teal); color: white; }
+        .btn-rotate:hover { background: #0f766e; }
 
-        .btn-flip { background: var(--surface-3); color: var(--text-2); border: 1.5px solid var(--border); }
+        .btn-flip { background: var(--surface-3); color: var(--ink); border: 1.5px solid var(--border); }
         .btn-flip:hover { background: var(--border); }
 
-        .btn-warning { background: #fef3c7; color: var(--amber); border: 1.5px solid #fde68a; }
+        .btn-warning { background: var(--amber-dim); color: var(--amber); border: 1.5px solid #f6d9a0; }
         .btn-warning:hover { background: var(--amber); color: white; }
 
         .btn-small { padding: 7px 11px; font-size: 11px; }
 
-        /* ── Action button grid ─────────────────────────────────────────── */
+        /* ── Button Group ─────────────────────────────── */
         .button-group {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+            grid-template-columns: 1fr 1fr;
             gap: 10px;
-            margin-top: 20px;
-        }
-
-        .button-group .btn { width: 100%; justify-content: center; text-align: center; }
-
-        /* ── Sync bar ────────────────────────────────────────────────────── */
-        .backup-bar {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 10px 14px;
-            background: var(--surface-2);
-            border: 1.5px solid var(--border);
-            border-radius: var(--radius);
-            margin-top: 12px;
-            flex-wrap: wrap;
-        }
-        .backup-status {
-            flex: 1;
-            font-size: 12px;
-            color: var(--text-2);
-            min-width: 140px;
-        }
-        .backup-status.ok      { color: var(--green);  font-weight: 600; }
-        .backup-status.warn    { color: var(--amber);  font-weight: 600; }
-        .backup-status.syncing { color: var(--blue);   font-weight: 600; }
-        .backup-bar .btn { font-size: 12px; padding: 7px 13px; white-space: nowrap; }
-
-        /* ── Gist setup modal ────────────────────────────────────────────── */
-        .gist-modal {
-            display: none; position: fixed; z-index: 10000; inset: 0;
-            background: rgba(0,0,0,0.55);
-            align-items: center; justify-content: center; padding: 16px;
-        }
-        .gist-modal.show { display: flex; }
-        .gist-modal-box {
-            background: var(--surface);
-            border-radius: var(--radius-lg);
-            padding: 26px;
-            max-width: 480px; width: 100%;
-            box-shadow: var(--shadow-lg);
-            border-top: 4px solid var(--navy);
-            max-height: 90vh; overflow-y: auto;
-        }
-        .gist-modal-box h2 { color: var(--navy); font-size: 18px; margin: 0 0 14px; }
-        .gist-steps {
-            background: var(--surface-2);
-            border: 1px solid var(--border);
-            border-radius: var(--radius);
-            padding: 13px 15px;
-            font-size: 12.5px;
-            color: var(--text-2);
-            line-height: 1.75;
-            margin-bottom: 16px;
-        }
-        .gist-steps ol { padding-left: 17px; margin: 6px 0 0; }
-        .gist-steps a  { color: var(--blue); }
-        .gist-id-box {
-            background: var(--surface-3);
-            border: 1.5px solid var(--border-mid);
-            border-radius: var(--radius-sm);
-            padding: 9px 12px;
-            font-family: 'DM Mono', monospace;
-            font-size: 12px; color: var(--navy);
-            word-break: break-all; margin-bottom: 6px;
-        }
-
-        /* ── Advanced modal ──────────────────────────────────────────────── */
-        .adv-modal {
-            display: none; position: fixed; z-index: 10000; inset: 0;
-            background: rgba(0,0,0,0.55);
-            align-items: center; justify-content: center; padding: 16px;
-        }
-        .adv-modal.show { display: flex; }
-        .adv-modal-box {
-            background: var(--surface);
-            border-radius: var(--radius-lg);
-            padding: 26px;
-            max-width: 420px; width: 100%;
-            box-shadow: var(--shadow-lg);
-            border-top: 4px solid var(--navy);
-            max-height: 90vh; overflow-y: auto;
-        }
-        .adv-modal-box h2 { color: var(--navy); font-size: 18px; margin: 0 0 18px; }
-        .adv-section {
-            border-top: 1px solid var(--border);
-            padding-top: 14px;
-            margin-top: 14px;
-        }
-        .adv-section:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
-        .adv-section-label {
-            font-size: 10px; font-weight: 700; letter-spacing: 1px;
-            text-transform: uppercase; color: var(--text-2);
-            margin-bottom: 10px;
-        }
-        .adv-btn-group { display: flex; flex-direction: column; gap: 8px; }
-        .adv-btn-group .btn { text-align: left; justify-content: flex-start; font-size: 14px; padding: 11px 15px; }
-        #paymentTrackingBtn {
-            background: var(--navy);
-            color: white;
-            font-size: 15px;
-            padding: 16px;
-            border-radius: var(--radius);
-            transition: all 0.2s;
-            letter-spacing: 0.2px;
-        }
-
-        #paymentTrackingBtn:hover {
-            background: var(--navy-mid);
-            box-shadow: 0 6px 18px rgba(15,31,61,0.35);
-            transform: translateY(-1px);
-        }
-
-        #paymentTrackingBtn.all-paid { background: var(--green); }
-        #paymentTrackingBtn.all-paid:hover { background: #15803d; box-shadow: 0 6px 18px rgba(22,163,74,0.35); }
-
-        /* ── Receipt full-screen modal ───────────────────────────────────── */
-        .receipt-modal {
-            display: none;
-            position: fixed;
-            z-index: 1000;
-            inset: 0;
-            background: rgba(0,0,0,0.92);
-            justify-content: center;
-            align-items: center;
-        }
-        .receipt-modal.show { display: flex; }
-        .receipt-modal img { max-width: 92%; max-height: 92%; border-radius: var(--radius); }
-
-        .close-modal {
-            position: absolute;
-            top: 18px; right: 28px;
-            color: rgba(255,255,255,0.7);
-            font-size: 36px;
-            font-weight: 300;
-            cursor: pointer;
-            line-height: 1;
-            transition: color 0.15s;
-        }
-        .close-modal:hover { color: white; }
-
-        /* ── Crop modal ─────────────────────────────────────────────────── */
-        .crop-modal {
-            display: none;
-            position: fixed;
-            z-index: 2000;
-            inset: 0;
-            background: rgba(0,0,0,0.65);
-            overflow: auto;
-        }
-        .crop-modal.show { display: block; }
-
-        .crop-container {
-            max-width: 860px;
-            margin: 24px auto;
-            padding: 24px;
-            background: var(--surface);
-            border-radius: var(--radius-lg);
-            box-shadow: var(--shadow-lg);
-        }
-
-        .crop-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 16px;
-            border-bottom: 1px solid var(--border);
-        }
-
-        .crop-header h2 { color: var(--navy); font-size: 18px; font-weight: 700; }
-
-        .crop-image-container {
-            max-width: 100%;
-            max-height: 500px;
-            margin-bottom: 18px;
-            background: var(--surface-3);
-            border-radius: var(--radius);
-            overflow: hidden;
-            border: 1px solid var(--border);
-        }
-        .crop-image-container img { max-width: 100%; display: block; }
-
-        .crop-controls {
-            display: flex;
-            gap: 10px;
-            flex-wrap: wrap;
-            justify-content: center;
-            margin-bottom: 16px;
-        }
-        .crop-controls .btn { padding: 10px 18px; font-size: 13px; }
-
-        .crop-actions {
-            display: flex;
-            gap: 12px;
-            justify-content: center;
-            padding-top: 16px;
-            border-top: 1px solid var(--border);
-        }
-
-        /* ── Payment tracking modal ──────────────────────────────────────── */
-        .payment-tracking-modal {
-            display: none;
-            position: fixed;
-            z-index: 2000;
-            inset: 0;
-            background: rgba(0,0,0,0.65);
-            overflow: auto;
-        }
-        .payment-tracking-modal.show { display: block; }
-
-        .payment-container {
-            max-width: 720px;
-            margin: 32px auto 24px;
-            padding: 28px 0 28px 0;
-            background: var(--surface);
-            border-radius: var(--radius-lg);
-            max-height: 82vh;
-            overflow-y: auto;
-            overflow-x: hidden;
-            box-shadow: var(--shadow-lg);
-        }
-
-        .payment-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 14px;
-            padding-bottom: 0;
-            padding: 0 28px;
-        }
-
-        .payment-header h2 {
-            color: var(--navy);
-            font-size: 20px;
-            font-weight: 700;
-            margin: 0;
-        }
-
-        .payment-list { margin-top: 16px; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-
-        .payment-item {
-            display: flex;
-            flex-direction: row;
-            align-items: stretch;
-            margin-bottom: 8px;
-            background: var(--surface-2);
-            border-radius: var(--radius);
-            border-left: 3px solid var(--red);
-            border: 1px solid var(--border);
-            border-left: 3px solid var(--red);
-            transition: box-shadow 0.15s;
-            /* 220 text + 54 PDF + 54 LOAD + 62 check + 54 delete = 444px of buttons/text
-               Add 27px so half the PDF icon peeks on a 390px phone (390+27=417 visible, PDF starts at 220) */
-            min-width: calc(100vw + 27px);
-            width: calc(100vw + 27px);
-        }
-        @media (min-width: 600px) {
-            .payment-item { min-width: 580px; width: 580px; }
-        }
-
-        .payment-item:hover { box-shadow: var(--shadow-sm); }
-
-        .payment-item.paid {
-            border-left-color: var(--green);
-            background: var(--green-pale);
-            border-color: #bbf7d0;
-            border-left-color: var(--green);
-        }
-
-        .payment-customer-name {
-            font-size: 14px;
-            font-weight: 700;
-            color: var(--text-1);
-        }
-
-        .payment-details-row {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            gap: 12px;
-        }
-
-        .payment-info-left {
-            display: flex;
-            gap: 12px;
-            align-items: center;
-            flex: 1;
-            flex-wrap: wrap;
-        }
-
-        .payment-date {
-            font-weight: 500;
-            color: var(--text-2);
-            font-size: 12px;
-            white-space: nowrap;
-        }
-
-        .payment-report-num {
-            font-size: 12px;
-            color: var(--text-1);
-            font-family: 'DM Mono', monospace;
-            white-space: nowrap;
-        }
-
-        .payment-amount {
-            font-weight: 700;
-            color: var(--blue);
-            font-size: 15px;
-            font-family: 'DM Mono', monospace;
-            white-space: nowrap;
-        }
-
-        .payment-checkbox {
-            width: 22px; height: 22px;
-            cursor: pointer;
-            accent-color: var(--green);
-        }
-
-        .payment-summary {
-            margin-bottom: 14px;
-            margin-left: 28px;
-            margin-right: 28px;
-            padding: 18px 22px;
-            background: var(--navy);
-            color: white;
-            border-radius: var(--radius);
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            font-size: 16px;
-            font-weight: 600;
-        }
-
-        .payment-list {
-            margin-top: 16px;
-            overflow-x: auto;
-            -webkit-overflow-scrolling: touch;
-            /* Clip right edge so ~half of PDF icon peeks, hinting swipe */
-            padding-right: 0;
-            margin-right: 0;
-        }
-        /* Each row wider than screen; left-aligned text, icons on right */
-        .payment-list-inner {
-            min-width: max-content;
-            padding-left: 0;
-        }
-
-        .payment-empty {
-            text-align: center;
-            padding: 48px 20px;
-            color: var(--text-3);
-            font-size: 15px;
-        }
-
-        .payment-action-btn {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 3px;
-            padding: 8px 10px;
-            cursor: pointer;
-            border: none;
-            background: transparent;
-            border-left: 1px solid #e0e0e0;
-            min-width: 54px;
-            transition: background 0.15s;
-            flex: 0 0 auto;
-        }
-        .payment-action-btn:hover { background: rgba(0,0,0,0.05); }
-        .payment-action-btn span {
-            font-size: 9px;
-            font-weight: 600;
-            letter-spacing: 0.5px;
-            text-transform: uppercase;
-            color: var(--text-3);
-        }
-        .payment-action-btn svg { display: block; }
-        .payment-check-btn {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            padding: 8px 14px;
-            cursor: pointer;
-            border-left: 1px solid #e0e0e0;
-            flex: 0 0 auto;
-            background: transparent;
-            transition: background 0.15s;
-        }
-        .payment-check-btn:hover { background: rgba(0,0,0,0.05); }
-
-        /* ── Custom dialog ───────────────────────────────────────────────── */
-        .custom-dialog-overlay {
-            display: none;
-            position: fixed;
-            z-index: 10000;
-            inset: 0;
-            background: rgba(0,0,0,0.45);
-            align-items: center;
-            justify-content: center;
-        }
-        .custom-dialog-overlay.show { display: flex; }
-
-        .custom-dialog {
-            background: var(--surface);
-            padding: 28px 30px;
-            border-radius: var(--radius-lg);
-            max-width: 380px;
-            width: 92%;
-            box-shadow: var(--shadow-lg);
-            border-top: 3px solid var(--blue);
-        }
-
-        .custom-dialog-title {
-            font-size: 16px;
-            font-weight: 700;
-            color: var(--navy);
             margin-bottom: 12px;
         }
 
-        .custom-dialog-message {
-            font-size: 14px;
-            color: var(--text-2);
-            line-height: 1.6;
-            margin-bottom: 22px;
-            white-space: pre-line;
-        }
+        /* ── Payment Tracking Button (legacy compat) ──── */
 
-        .custom-dialog-buttons {
-            display: flex;
-            gap: 10px;
-            justify-content: flex-end;
-        }
-
-        /* ── Customer DB dropdown ────────────────────────────────────────── */
-        .cdb-option {
+        /* ── Sync / Backup Bar ────────────────────────── */
+        .backup-bar {
+            display: flex; align-items: center; gap: 8px;
             padding: 10px 14px;
-            cursor: pointer;
+            background: var(--surface);
+            border: 1.5px solid var(--border);
+            border-radius: var(--r);
+            flex-wrap: wrap;
+        }
+        .backup-status { flex: 1; font-size: 12px; color: var(--ash); min-width: 120px; }
+        .backup-status.ok      { color: var(--green); font-weight: 600; }
+        .backup-status.warn    { color: var(--amber); font-weight: 600; }
+        .backup-status.syncing { color: var(--blue);  font-weight: 600; }
+        .backup-bar .btn { font-size: 12px; padding: 7px 12px; }
+
+        /* ── Dev Credit ───────────────────────────────── */
+        .dev-credit { text-align: center; padding: 18px 0 4px; }
+        .dev-credit p { font-size: 11px; color: var(--fog); margin: 0; }
+
+        /* ── Customer dropdown ────────────────────────── */
+        .cdb-option {
+            padding: 10px 14px; cursor: pointer;
             border-bottom: 1px solid var(--border);
-            font-size: 13px;
-            transition: background 0.12s;
+            font-size: 13px; transition: background 0.12s;
         }
         .cdb-option:last-child { border-bottom: none; }
-        .cdb-option:hover { background: var(--blue-pale); }
+        .cdb-option:hover { background: var(--amber-pale); }
 
-        /* ── Litepicker ──────────────────────────────────────────────────── */
-        .litepicker .container__footer {
-            text-align: center;
-            padding: 10px;
-            border-top: 1px solid var(--border);
-        }
+        /* ── Litepicker ───────────────────────────────── */
+        .litepicker .container__footer { text-align: center; padding: 10px; border-top: 1px solid var(--border); }
         .litepicker .container__footer .preview-date-range { display: none; }
         .litepicker .container__footer button.apply-button {
-            background: var(--blue);
-            color: white;
-            border: none;
-            border-radius: var(--radius-sm);
-            padding: 9px 24px;
-            font-weight: 600;
-            font-size: 13px;
-            font-family: 'DM Sans', sans-serif;
-            cursor: pointer;
-            width: 100%;
+            background: var(--amber); color: white; border: none;
+            border-radius: var(--r-sm); padding: 9px 24px;
+            font-weight: 600; font-size: 13px;
+            font-family: 'Outfit', sans-serif; cursor: pointer; width: 100%;
         }
-        .litepicker .container__footer button.apply-button:hover { background: #1d4ed8; }
+        .litepicker .container__footer button.apply-button:hover { background: var(--amber-lt); }
         .litepicker .container__days .day-item.is-start-date,
-        .litepicker .container__days .day-item.is-end-date { background-color: var(--navy) !important; }
-        .litepicker .container__days .day-item.is-in-range {
-            background-color: var(--blue-pale) !important;
-            color: var(--blue) !important;
-        }
+        .litepicker .container__days .day-item.is-end-date { background-color: var(--void) !important; }
+        .litepicker .container__days .day-item.is-in-range { background-color: var(--amber-pale) !important; color: var(--amber) !important; }
 
         #serviceDateRange {
-            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='15' height='15' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E");
-            background-repeat: no-repeat;
-            background-position: right 12px center;
-            padding-right: 36px;
+            background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23b0aaa5' stroke-width='2'%3E%3Crect x='3' y='4' width='18' height='18' rx='2' ry='2'%3E%3C/rect%3E%3Cline x1='16' y1='2' x2='16' y2='6'%3E%3C/line%3E%3Cline x1='8' y1='2' x2='8' y2='6'%3E%3C/line%3E%3Cline x1='3' y1='10' x2='21' y2='10'%3E%3C/line%3E%3C/svg%3E");
+            background-repeat: no-repeat; background-position: right 12px center; padding-right: 36px;
+            cursor: pointer; background-color: white;
         }
 
-        /* ── Developer credit ────────────────────────────────────────────── */
-        .dev-credit { text-align: center; margin-top: 28px; padding-top: 20px; border-top: 1px solid var(--border); }
-        .dev-credit p { font-size: 11px; color: var(--text-3); margin: 0; }
-        .dev-credit p + p { margin-top: 3px; }
+        /* ── Gist Modal ───────────────────────────────── */
+        .gist-modal { display: none; position: fixed; z-index: 10000; inset: 0; background: rgba(0,0,0,0.65); align-items: center; justify-content: center; padding: 16px; }
+        .gist-modal.show { display: flex; }
+        .gist-modal-box { background: var(--surface); border-radius: var(--r-xl); padding: 24px; max-width: 480px; width: 100%; box-shadow: var(--sh-lg); border-top: 4px solid var(--amber); max-height: 90vh; overflow-y: auto; }
+        .gist-modal-box h2 { color: var(--void); font-size: 18px; margin: 0 0 14px; }
+        .gist-steps { background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--r); padding: 13px 15px; font-size: 12px; color: var(--ash); line-height: 1.75; margin-bottom: 16px; }
+        .gist-steps ol { padding-left: 17px; margin: 6px 0 0; }
+        .gist-steps a { color: var(--amber); }
+        .gist-id-box { background: var(--surface-3); border: 1.5px solid var(--border-2); border-radius: var(--r-sm); padding: 9px 12px; font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--void); word-break: break-all; margin-bottom: 6px; }
 
-        /* ── Responsive ──────────────────────────────────────────────────── */
-        @media (max-width: 640px) {
-            body { padding: 0; }
-            .container { border-radius: 0; min-height: 100vh; }
-            .content { padding: 16px; }
-            .section { padding: 16px 18px; }
+        /* ── Advanced Modal ───────────────────────────── */
+        .adv-modal { display: none; position: fixed; z-index: 10000; inset: 0; background: rgba(0,0,0,0.65); align-items: center; justify-content: center; padding: 16px; }
+        .adv-modal.show { display: flex; }
+        .adv-modal-box { background: var(--surface); border-radius: var(--r-xl); padding: 24px; max-width: 420px; width: 100%; box-shadow: var(--sh-lg); border-top: 4px solid var(--amber); max-height: 90vh; overflow-y: auto; }
+        .adv-modal-box h2 { color: var(--void); font-size: 18px; margin: 0 0 18px; }
+        .adv-section { border-top: 1px solid var(--border); padding-top: 14px; margin-top: 14px; }
+        .adv-section:first-of-type { border-top: none; padding-top: 0; margin-top: 0; }
+        .adv-section-label { font-size: 9px; font-weight: 800; letter-spacing: 1.5px; text-transform: uppercase; color: var(--ash); margin-bottom: 10px; }
+        .adv-btn-group { display: flex; flex-direction: column; gap: 8px; }
+        .adv-btn-group .btn { text-align: left; justify-content: flex-start; font-size: 14px; padding: 11px 15px; }
+
+        /* ── Receipt Full-screen Modal ────────────────── */
+        .receipt-modal { display: none; position: fixed; z-index: 1000; inset: 0; background: rgba(0,0,0,0.96); justify-content: center; align-items: center; }
+        .receipt-modal.show { display: flex; }
+        .receipt-modal img { max-width: 92%; max-height: 92%; border-radius: var(--r); }
+        .close-modal { position: absolute; top: 18px; right: 24px; color: rgba(255,255,255,0.5); font-size: 34px; font-weight: 300; cursor: pointer; line-height: 1; transition: color 0.15s; }
+        .close-modal:hover { color: white; }
+
+        /* ── Crop Modal ───────────────────────────────── */
+        .crop-modal { display: none; position: fixed; z-index: 2000; inset: 0; background: rgba(0,0,0,0.7); overflow: auto; }
+        .crop-modal.show { display: block; }
+        .crop-container { max-width: 860px; margin: 24px auto; padding: 24px; background: var(--surface); border-radius: var(--r-xl); box-shadow: var(--sh-lg); }
+        .crop-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; padding-bottom: 16px; border-bottom: 1px solid var(--border); }
+        .crop-header h2 { color: var(--void); font-size: 18px; font-weight: 700; }
+        .crop-image-container { max-width: 100%; max-height: 500px; margin-bottom: 18px; background: var(--surface-3); border-radius: var(--r); overflow: hidden; border: 1px solid var(--border); }
+        .crop-image-container img { max-width: 100%; display: block; }
+        .crop-controls { display: flex; gap: 10px; flex-wrap: wrap; justify-content: center; margin-bottom: 16px; }
+        .crop-controls .btn { padding: 10px 18px; font-size: 13px; }
+        .crop-actions { display: flex; gap: 12px; justify-content: center; padding-top: 16px; border-top: 1px solid var(--border); }
+
+        /* ── Payment Tracking Modal ───────────────────── */
+        .payment-tracking-modal { display: none; position: fixed; z-index: 2000; inset: 0; background: rgba(0,0,0,0.65); overflow: auto; }
+        .payment-tracking-modal.show { display: block; }
+        .payment-container { max-width: 520px; margin: 0 auto; min-height: 100vh; background: var(--bg); display: flex; flex-direction: column; }
+        .payment-header { display: flex; align-items: center; justify-content: space-between; padding: 18px 20px; background: var(--void); position: sticky; top: 0; z-index: 10; }
+        .payment-header h2 { color: white; font-size: 16px; font-weight: 700; margin: 0; }
+        .payment-summary { display: flex; align-items: center; justify-content: space-between; padding: 11px 20px; background: var(--amber-pale); border-bottom: 1.5px solid var(--amber-dim); font-size: 13px; font-weight: 600; color: var(--amber); }
+        .payment-list { flex: 1; overflow-y: auto; padding: 10px 12px; }
+        .payment-empty { text-align: center; padding: 40px 20px; color: var(--ash); font-size: 14px; }
+
+        /* Card row */
+        .payment-item {
+            border-radius: var(--r-lg);
+            border: 1.5px solid var(--border);
+            background: var(--surface);
+            margin-bottom: 8px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: var(--sh-sm);
+            transition: border-color 0.22s, box-shadow 0.22s;
+            cursor: pointer;
+        }
+        .payment-item.open {
+            border-color: var(--amber);
+            box-shadow: var(--sh);
+        }
+        .payment-item.paid { opacity: 0.6; }
+        .payment-item.paid .pi-name { text-decoration: line-through; }
+
+        /*
+         * Track is 150% wide.
+         *   Text panel  = 50% of track = 75% of container  (visible at rest)
+         *   Button panel = 50% of track = 75% of container  (slides in)
+         * At rest   translateX(0)      → text(75%) + button-peek(25%)
+         * At open   translateX(-33.33%)→ text tail(25%) + buttons(75%)
+         * translateX % is relative to track itself (1.5× container),
+         * so -33.33% of 1.5C = -0.5C which shifts by half the container width.
+         */
+        .payment-item-track {
+            display: flex;
+            align-items: stretch;
+            width: 150%;
+            transform: translateX(0);
+            transition: transform 0.32s cubic-bezier(0.4, 0, 0.2, 1);
+        }
+        .payment-item.open .payment-item-track { transform: translateX(-33.33%); }
+
+        /* Text panel — 50% of track = 75% of container */
+        .payment-item-text {
+            flex: 0 0 50%;
+            min-width: 0;
+            padding: 13px 16px 12px;
+            /* Soft right fade to hint buttons behind */
+            -webkit-mask: linear-gradient(to right, black 70%, transparent 100%);
+                    mask: linear-gradient(to right, black 70%, transparent 100%);
+            transition: -webkit-mask 0.32s, mask 0.32s;
+        }
+        /* When open: no fade needed on text (it slides mostly out of view) */
+        .payment-item.open .payment-item-text {
+            -webkit-mask: none; mask: none;
+        }
+        .pi-name {
+            font-size: 14px; font-weight: 700; color: var(--void);
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .pi-meta {
+            display: flex; gap: 7px; align-items: center; margin-top: 3px; flex-wrap: nowrap;
+        }
+        .payment-date   { font-size: 10px; color: var(--ash); font-family: 'JetBrains Mono', monospace; }
+        .payment-report-num { font-size: 10px; color: var(--ash); font-family: 'JetBrains Mono', monospace; }
+        .payment-amount { font-size: 12px; font-weight: 700; color: var(--void); font-family: 'JetBrains Mono', monospace; }
+
+        /* Button panel — 50% of track = 75% of container */
+        .payment-item-btns {
+            flex: 0 0 50%;
+            display: flex;
+            border-left: 1px solid var(--border);
+        }
+        .payment-action-btn {
+            flex: 1;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            gap: 3px; padding: 8px 4px;
+            background: none; border: none; border-left: 1px solid var(--border);
+            cursor: pointer;
+            font-size: 8px; font-weight: 800; letter-spacing: 0.5px; text-transform: uppercase;
+            font-family: 'Outfit', sans-serif; color: var(--ash);
+            transition: background 0.14s, transform 0.1s;
+        }
+        .payment-action-btn:first-child { border-left: none; }
+        .payment-action-btn:active { background: var(--surface-2); transform: scale(0.95); }
+
+        /* ── Custom Dialog ────────────────────────────── */
+        .custom-dialog-overlay { display: none; position: fixed; z-index: 20000; inset: 0; background: rgba(0,0,0,0.65); align-items: center; justify-content: center; padding: 20px; }
+        .custom-dialog-overlay.show { display: flex; }
+        .custom-dialog { background: var(--surface); border-radius: var(--r-xl); padding: 26px; max-width: 360px; width: 100%; box-shadow: var(--sh-lg); border-top: 3px solid var(--amber); }
+        .custom-dialog-title { font-size: 17px; font-weight: 700; color: var(--void); margin-bottom: 10px; }
+        .custom-dialog-message { font-size: 14px; color: var(--ash); line-height: 1.6; margin-bottom: 22px; white-space: pre-line; }
+        .custom-dialog-buttons { display: flex; gap: 10px; justify-content: flex-end; }
+
+        /* ── Section (compat) ─────────────────────────── */
+        .section { margin-bottom: 0; }
+        .section-title { display: none; }
+        .expense-item { display: flex; justify-content: space-between; align-items: center; }
+
+        /* ── Responsive ───────────────────────────────── */
+        @media (max-width: 520px) {
+            .app-shell { max-width: 100%; }
+            .tab-nav { max-width: 100%; }
             .form-grid { grid-template-columns: 1fr; }
             .expense-entry { grid-template-columns: 1fr; }
             .button-group { grid-template-columns: 1fr 1fr; }
-            .total-section { flex-direction: column; gap: 6px; text-align: center; }
-            .total-section .amount { font-size: 26px; }
         }
 
-        /* ── Misc ────────────────────────────────────────────────────────── */
-        .expense-item { display: flex; justify-content: space-between; align-items: center; }
+        /* ── Scrollbar ────────────────────────────────── */
+        ::-webkit-scrollbar { width: 4px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 99px; }
+
+        /* ── Merged Summary Card ──────────────────────── */
+        .summary-card {
+            background: var(--void);
+            border-radius: var(--r-lg);
+            margin-bottom: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+        .summary-card-accent {
+            position: absolute; left: 0; top: 0; bottom: 0; width: 3px;
+            background: linear-gradient(180deg, var(--amber-lt), var(--amber));
+        }
+        .summary-top {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 20px 12px 20px;
+        }
+        .summary-divider { height: 1px; background: rgba(255,255,255,0.07); margin: 0 0; }
+        .summary-bottom {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 12px 20px; cursor: pointer; border: none;
+            background: none; width: 100%; font-family: 'Outfit', sans-serif;
+            transition: background 0.15s; text-align: left;
+        }
+        .summary-bottom:hover { background: rgba(255,255,255,0.04); }
+        .summary-bottom.all-paid { background: rgba(22,163,74,0.15); }
+
+        /* ── Email Modal ──────────────────────────────── */
+        .email-modal { display: none; position: fixed; z-index: 3000; inset: 0; background: rgba(0,0,0,0.65); align-items: flex-end; justify-content: center; }
+        .email-modal.show { display: flex; }
+        .email-modal-box {
+            background: var(--surface); border-radius: var(--r-xl) var(--r-xl) 0 0;
+            padding: 0; max-width: 520px; width: 100%;
+            box-shadow: var(--sh-lg); max-height: 88vh; display: flex; flex-direction: column;
+        }
+        .email-modal-header {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 18px 20px 14px; border-bottom: 1px solid var(--border);
+            flex-shrink: 0;
+        }
+        .email-modal-header h2 { font-size: 17px; font-weight: 700; color: var(--void); margin: 0; }
+        .email-modal-body { overflow-y: auto; flex: 1; padding: 12px; }
+        .email-modal-footer {
+            padding: 12px 16px; border-top: 1px solid var(--border);
+            display: flex; gap: 10px; flex-shrink: 0;
+        }
+        .email-report-item {
+            display: flex; align-items: center; gap: 12px;
+            padding: 11px 12px; border-radius: var(--r);
+            border: 1.5px solid var(--border);
+            margin-bottom: 7px; cursor: pointer;
+            transition: border-color 0.15s, background 0.15s;
+            background: var(--surface);
+        }
+        .email-report-item:hover { background: var(--surface-2); }
+        .email-report-item.selected { border-color: var(--amber); background: var(--amber-pale); }
+        .email-report-item.no-pdf { opacity: 0.45; cursor: not-allowed; }
+        .email-check {
+            width: 22px; height: 22px; border-radius: 50%; border: 2px solid var(--border-2);
+            flex-shrink: 0; display: flex; align-items: center; justify-content: center;
+            font-size: 12px; transition: all 0.15s;
+        }
+        .email-report-item.selected .email-check {
+            background: var(--amber); border-color: var(--amber); color: white;
+        }
+        .email-report-info { flex: 1; min-width: 0; }
+        .email-report-name { font-size: 14px; font-weight: 700; color: var(--void); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+        .email-report-meta { font-size: 11px; color: var(--ash); margin-top: 2px; font-family: 'JetBrains Mono', monospace; }
+        .email-pdf-badge {
+            font-size: 9px; font-weight: 700; letter-spacing: 0.5px;
+            padding: 3px 7px; border-radius: 99px; flex-shrink: 0;
+        }
+        .email-pdf-badge.ready { background: var(--green-pale); color: var(--green); }
+        .email-pdf-badge.missing { background: var(--red-pale); color: var(--red); }
+        .email-select-all-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 6px 4px 10px; font-size: 12px; color: var(--ash);
+        }
+        .email-select-all-row button {
+            background: none; border: none; color: var(--amber); font-size: 12px;
+            font-weight: 700; font-family: 'Outfit', sans-serif; cursor: pointer; padding: 0;
+        }
+        .email-hint {
+            font-size: 11px; color: var(--ash); text-align: center;
+            padding: 8px 12px; background: var(--surface-2);
+            border-radius: var(--r-sm); border: 1px solid var(--border);
+            margin-bottom: 10px; line-height: 1.5;
+        }
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="logo-container">
-                <h2 style="margin: 0; color: #4A5FA9; font-size: 28px; font-weight: 700; letter-spacing: 1px;">ORICS INDUSTRIES</h2>
-            </div>
-            <h1>Service Expense Report</h1>
-            <p>Professional Expense Documentation</p>
-        </div>
+<div class="app-shell">
 
-        <div class="content">
-            <!-- Report Information -->
-            <div class="section">
-                <div class="section-title">Report Information</div>
+    <!-- ── Header ─────────────────────────────────────── -->
+    <header class="app-header">
+        <div class="app-header-brand">
+            <div class="app-header-logo">ORICS</div>
+            <div class="app-header-sub">Expense Report</div>
+        </div>
+        <div class="app-header-right">
+            <span class="header-sync-dot warn" id="headerSyncDot"></span>
+            <button class="header-adv-btn" onclick="openAdvanced()">⚙ Advanced</button>
+        </div>
+    </header>
+
+    <!-- ── Tab Content ────────────────────────────────── -->
+    <div class="tab-content">
+
+        <!-- ╔══ TAB 1: REPORT ══╗ -->
+        <div class="tab-panel active" id="tab-report">
+            <div class="card">
+                <div class="card-title"><span class="card-icon">👤</span> Technician</div>
+                <div class="form-group">
+                    <label>Name *</label>
+                    <input type="text" id="technicianName" placeholder="Your Name" required>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-title"><span class="card-icon">📋</span> Report Details</div>
                 <div class="form-grid">
                     <div class="form-group">
-                        <label>Technician Name *</label>
-                        <input type="text" id="technicianName" placeholder="Your Name" required>
-                    </div>
-                    <div class="form-group">
-                        <label>Service Report Number *</label>
+                        <label>Report Number *</label>
                         <input type="text" id="reportNumber" placeholder="12345" required>
                     </div>
-                    <div class="form-group" style="position: relative;">
-                        <label>Customer/Company Name *</label>
+                    <div class="form-group" style="position:relative;">
+                        <label>Customer / Company *</label>
                         <input type="text" id="companyName" placeholder="Customer Name" required
                                oninput="onCompanyInput()" onblur="hideCustomerDropdown()" autocomplete="off">
-                        <div id="customerDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:white; border:2px solid #c5cae9; border-top:none; border-radius:0 0 8px 8px; z-index:500; max-height:180px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.12);"></div>
+                        <div id="customerDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:2px solid #e8d8b8;border-top:none;border-radius:0 0 8px 8px;z-index:500;max-height:180px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12);"></div>
                     </div>
-                    <div class="form-group" style="position: relative;">
-                        <label>Machine Serial Number</label>
+                    <div class="form-group" style="position:relative;">
+                        <label>Machine Serial</label>
                         <input type="text" id="machineSerial" placeholder="e.g. S30 4up 123456" autocomplete="off"
                                oninput="onSerialInput()" onblur="hideSerialDropdown()">
-                        <div id="serialDropdown" style="display:none; position:absolute; top:100%; left:0; right:0; background:white; border:2px solid #c5cae9; border-top:none; border-radius:0 0 8px 8px; z-index:500; max-height:150px; overflow-y:auto; box-shadow:0 4px 12px rgba(0,0,0,0.12);"></div>
+                        <div id="serialDropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:white;border:2px solid #e8d8b8;border-top:none;border-radius:0 0 8px 8px;z-index:500;max-height:150px;overflow-y:auto;box-shadow:0 4px 12px rgba(0,0,0,0.12);"></div>
                     </div>
                     <div class="form-group">
                         <label>Service Location *</label>
-                        <input type="text" id="serviceLocation" placeholder="New York, NY" required>
+                        <input type="text" id="serviceLocation" placeholder="City, State" required>
                     </div>
                     <div class="form-group">
                         <label>Service Date(s) *</label>
-                        <input type="text" id="serviceDateRange" placeholder="Select date or range" readonly
-                               style="cursor: pointer; background: white;"
-                               required>
+                        <input type="text" id="serviceDateRange" placeholder="Select date or range" readonly required>
                         <input type="hidden" id="serviceDateFrom">
                         <input type="hidden" id="serviceDateTo">
                     </div>
                 </div>
             </div>
+        </div>
 
-            <!-- Mileage -->
-            <div class="section">
-                <div class="section-title">🚗 Mileage (Personal Vehicle)</div>
+        <!-- ╔══ TAB 2: EXPENSES ══╗ -->
+        <div class="tab-panel" id="tab-expenses">
+            <div class="card">
+                <div class="card-title"><span class="card-icon">🚗</span> Mileage</div>
                 <div class="mileage-calc">
                     <div class="form-grid">
                         <div class="form-group">
@@ -1012,20 +888,50 @@
                             <input type="number" id="milesDriven" placeholder="0" step="0.1" min="0">
                         </div>
                         <div class="form-group">
-                            <label>IRS Rate per Mile ($)</label>
+                            <label>Rate / Mile ($)</label>
                             <input type="number" id="mileageRate" value="0.725" step="0.001" min="0" oninput="calculateMileage(); saveMileageRate();">
                         </div>
                         <div class="form-group">
                             <label>Mileage Total</label>
-                            <input type="text" id="mileageTotal" readonly style="font-weight: bold; background: white;">
+                            <input type="text" id="mileageTotal" readonly>
                         </div>
                     </div>
                 </div>
             </div>
 
+            <div class="card">
+                <div class="card-title"><span class="card-icon">🧾</span> Expenses</div>
+                <div class="expense-list" id="expenseList"></div>
+                <button class="add-expense-btn" onclick="addExpense()">＋ Add Expense</button>
+            </div>
+        </div>
+
+        <!-- ╔══ TAB 3: SUBMIT ══╗ -->
+        <div class="tab-panel" id="tab-submit">
+
+            <!-- Merged Summary Card — entire card is one button -->
+            <button class="summary-card" id="paymentTrackingBtn" onclick="openPaymentTracking()" style="width:100%;text-align:left;cursor:pointer;border:none;">
+                <div class="summary-card-accent"></div>
+                <div style="display:flex;align-items:center;justify-content:space-between;padding:12px 18px 12px 22px;">
+                    <!-- Left: This Report -->
+                    <div>
+                        <div style="font-size:8px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.35);">This Report</div>
+                        <div id="totalAmount" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;color:var(--amber-lt);letter-spacing:-0.5px;">$0.00</div>
+                    </div>
+                    <!-- Center divider -->
+                    <div style="width:1px;height:36px;background:rgba(255,255,255,0.1);margin:0 16px;flex-shrink:0;"></div>
+                    <!-- Right: Total Due -->
+                    <div style="flex:1;">
+                        <div style="font-size:8px;font-weight:800;letter-spacing:1.5px;text-transform:uppercase;color:rgba(255,255,255,0.35);">Total Expenses Due</div>
+                        <span id="paymentTrackingAmount" style="font-family:'JetBrains Mono',monospace;font-size:22px;font-weight:600;color:var(--amber-lt);">$0.00 Owed</span>
+                    </div>
+                    <span style="color:rgba(255,255,255,0.25);font-size:18px;flex-shrink:0;">›</span>
+                </div>
+            </button>
+
             <!-- Advances -->
-            <div class="section">
-                <div class="section-title">💵 Advances</div>
+            <div class="card" style="padding:12px 16px 14px;">
+                <div class="card-title" style="margin-bottom:10px;"><span class="card-icon">💵</span> Advances</div>
                 <div class="form-grid">
                     <div class="form-group">
                         <label>Cash Advance ($)</label>
@@ -1038,23 +944,11 @@
                 </div>
             </div>
 
-            <!-- Other Expenses -->
-            <div class="section">
-                <div class="section-title">💰 Other Expenses</div>
-                <div class="expense-list" id="expenseList"></div>
-                <button class="btn btn-secondary" onclick="addExpense()" style="margin-top: 15px;">+ Add Expense</button>
-            </div>
-
-            <!-- Total -->
-            <div class="total-section">
-                <h3>Total Expenses</h3>
-                <div class="amount" id="totalAmount">$0.00</div>
-            </div>
-
-            <!-- Actions -->
-            <div class="button-group">
-                <button class="btn btn-success" onclick="generatePDF()" style="display:flex;align-items:center;gap:8px;">
-                    <svg width="18" height="22" viewBox="0 0 26 30" fill="none" xmlns="http://www.w3.org/2000/svg" style="flex-shrink:0;">
+            <!-- Actions: 2 rows × 2 cols, then Email full-width -->
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:12px;">
+                <button class="btn btn-primary" onclick="exportToFile()">💾 Save</button>
+                <button class="btn btn-success" onclick="generatePDF()" style="gap:5px;">
+                    <svg width="14" height="17" viewBox="0 0 26 30" fill="none" style="flex-shrink:0;">
                         <rect x="1" y="1" width="18" height="24" rx="2" fill="white" stroke="#c0392b" stroke-width="1.5"/>
                         <path d="M5 1v5a1 1 0 001 1h5" stroke="#c0392b" stroke-width="1.5" fill="none"/>
                         <rect x="0" y="15" width="26" height="10" rx="2" fill="#c0392b"/>
@@ -1062,64 +956,72 @@
                     </svg>
                     Export PDF
                 </button>
-                <button class="btn btn-primary" onclick="exportToFile()">💾 Save Report File</button>
-                <button class="btn btn-primary" onclick="openLoadReportModal()">📂 Load Report File</button>
-                <button class="btn btn-secondary" onclick="clearForm()">🔄 Clear All</button>
-            </div>
-            
-            <div style="margin-top: 12px;">
-                <button class="btn" id="paymentTrackingBtn" onclick="openPaymentTracking()" style="width: 100%; font-size: 16px; padding: 15px;">
-                    💰 Payment Tracking: <span id="paymentTrackingAmount">$0.00 Owed</span>
+                <button class="btn btn-primary" onclick="openLoadReportModal()">📂 Load</button>
+                <button class="btn btn-secondary" onclick="clearForm()">🔄 Clear</button>
+                <button class="btn btn-secondary" onclick="openEmailModal()" style="grid-column:1/-1;border-color:var(--blue);color:var(--blue);">
+                    ✉️ Email Reports…
                 </button>
-            </div>
-            
-            <!-- Developer Credit -->
-            <div class="dev-credit">
-                <p style="font-size: 11px; color: #999; margin: 0;">
-                    App developed by Michael Zaidman
-                </p>
-                <p style="font-size: 10px; color: #aaa; margin: 5px 0 0 0;">
-                    Have improvement ideas? Contact me!
-                </p>
             </div>
 
             <!-- Sync Bar -->
             <div class="backup-bar">
                 <div class="backup-status warn" id="backupStatus">☁ Not connected</div>
-                <button class="btn btn-secondary" onclick="manualSync()" title="Sync now">🔄 Sync Now</button>
-                <button class="btn btn-primary" onclick="openAdvanced()" title="Advanced options">⚙ Advanced</button>
+                <button class="btn btn-secondary" onclick="manualSync()">🔄 Sync</button>
             </div>
+
+            <!-- Dev Credit -->
+            <div class="dev-credit">
+                <p>App developed by Michael Zaidman</p>
+            </div>
+        </div>
+
+    </div><!-- /tab-content -->
+
+    <!-- ── Bottom Tab Nav ─────────────────────────────── -->
+    <nav class="tab-nav">
+        <button class="tab-btn active" data-tab="tab-report">
+            <span class="tab-icon">📋</span>
+            Report
+        </button>
+        <button class="tab-btn" data-tab="tab-expenses">
+            <span class="tab-icon">🧾</span>
+            Expenses
+        </button>
+        <button class="tab-btn" data-tab="tab-submit">
+            <span class="tab-icon">✅</span>
+            Submit
+        </button>
+    </nav>
+
+    <!-- ── Modals ─────────────────────────────────────── -->
 
     <!-- Advanced Modal -->
     <div class="adv-modal" id="advModal">
         <div class="adv-modal-box">
             <h2>⚙ Advanced</h2>
-
             <div class="adv-section">
                 <div class="adv-section-label">☁ GitHub Gist Sync</div>
                 <div class="adv-btn-group">
                     <button class="btn btn-primary" onclick="closeAdvanced(); openGistSetup()">⚙ Setup Sync — Token &amp; Gist ID</button>
-                    <button class="btn btn-secondary" onclick="closeAdvanced(); pullFromGist(false)">⬇ load latest cloud data</button>
-                    <button class="btn btn-secondary" onclick="closeAdvanced(); pushToGist()">⬆ save current data to cloud</button>
+                    <button class="btn btn-secondary" onclick="closeAdvanced(); pullFromGist(false)">⬇ Load latest cloud data</button>
+                    <button class="btn btn-secondary" onclick="closeAdvanced(); pushToGist()">⬆ Save current data to cloud</button>
                 </div>
             </div>
-
             <div class="adv-section" id="advFolderSection" style="display:none;">
                 <div class="adv-section-label">📂 Report Files Folder</div>
                 <div class="adv-btn-group">
                     <button class="btn btn-primary" onclick="pickReportFolder()">📂 Set reports folder…</button>
-                    <div id="advFolderName" style="font-size:12px;color:var(--text-3);margin-top:4px;"></div>
+                    <div id="advFolderName" style="font-size:12px;color:var(--ash);margin-top:4px;"></div>
                 </div>
             </div>
-
-
+            <div class="adv-section">
+                <div class="adv-section-label">💾 Backup</div>
                 <div class="adv-btn-group">
-                    <button class="btn btn-success" onclick="closeAdvanced(); exportJsonBackup()">💾 save complete backup file</button>
-                    <button class="btn btn-secondary" onclick="closeAdvanced(); document.getElementById('importJsonFile').click()">📥 merge reports from backup file</button>
+                    <button class="btn btn-success" onclick="closeAdvanced(); exportJsonBackup()">💾 Save complete backup file</button>
+                    <button class="btn btn-secondary" onclick="closeAdvanced(); document.getElementById('importJsonFile').click()">📥 Merge reports from backup file</button>
                     <input type="file" id="importJsonFile" accept=".json" style="display:none;" onchange="importJsonBackup(this)">
                 </div>
             </div>
-
             <div style="display:flex;justify-content:flex-end;margin-top:20px;padding-top:14px;border-top:1px solid var(--border);">
                 <button class="btn btn-secondary" onclick="closeAdvanced()">Close</button>
             </div>
@@ -1130,46 +1032,41 @@
     <div class="gist-modal" id="gistModal">
         <div class="gist-modal-box">
             <h2>☁ Cloud Sync Setup</h2>
-
             <div class="gist-steps">
                 <strong>First time — create a GitHub token (5 minutes, once ever):</strong>
                 <ol>
-                    <li>Go to <a href="https://github.com" target="_blank">github.com</a> and sign in (or create a free account)</li>
-                    <li>Click your profile photo → <strong>Settings</strong></li>
-                    <li>Scroll to the bottom → <strong>Developer settings</strong></li>
-                    <li>Click <strong>Personal access tokens → Tokens (classic)</strong></li>
-                    <li>Click <strong>Generate new token (classic)</strong></li>
-                    <li>Give it any name (e.g. "ORICS"), set expiration to <strong>No expiration</strong>, tick the <strong>gist</strong> checkbox only, then click <strong>Generate token</strong></li>
-                    <li>Copy the token and paste it below</li>
+                    <li>Go to <a href="https://github.com" target="_blank">github.com</a> and sign in</li>
+                    <li>Profile photo → <strong>Settings</strong></li>
+                    <li>Scroll to <strong>Developer settings</strong></li>
+                    <li><strong>Personal access tokens → Tokens (classic)</strong></li>
+                    <li><strong>Generate new token (classic)</strong></li>
+                    <li>Name it "ORICS", no expiration, tick <strong>gist</strong> only, generate</li>
+                    <li>Copy the token and paste below</li>
                 </ol>
             </div>
-
             <div class="form-group" style="margin-bottom:14px;">
                 <label>GitHub Personal Access Token</label>
                 <input type="text" id="gistTokenInput" placeholder="ghp_xxxxxxxxxxxxxxxxxxxx"
-                       style="font-family:'DM Mono',monospace; font-size:12px; -webkit-text-security:disc;" autocomplete="new-password" spellcheck="false">
+                       style="font-family:'JetBrains Mono',monospace;font-size:12px;-webkit-text-security:disc;" autocomplete="new-password" spellcheck="false">
             </div>
-
             <div class="form-group" style="margin-bottom:6px;">
-                <label>Gist ID <span style="font-weight:400;text-transform:none;font-size:11px;">(leave blank on the first device — it will be created automatically)</span></label>
+                <label>Gist ID <span style="font-weight:400;text-transform:none;font-size:11px;">(leave blank on first device)</span></label>
                 <input type="text" id="gistIdInput" placeholder="Paste Gist ID from another device"
-                       style="font-family:'DM Mono',monospace; font-size:12px;">
+                       style="font-family:'JetBrains Mono',monospace;font-size:12px;">
             </div>
-
-            <div id="gistIdDisplay" style="display:none; margin-bottom:14px;">
-                <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--text-2);">Your Gist ID — paste this into other devices</label>
+            <div id="gistIdDisplay" style="display:none;margin-bottom:14px;">
+                <label style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.7px;color:var(--ash);">Your Gist ID — paste this into other devices</label>
                 <div class="gist-id-box" id="gistIdShow"></div>
                 <button class="btn btn-secondary" style="font-size:11px;padding:5px 12px;margin-top:4px;" onclick="copyGistId()">📋 Copy Gist ID</button>
             </div>
-
             <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:18px;padding-top:14px;border-top:1px solid var(--border);">
                 <button class="btn btn-secondary" onclick="closeGistSetup()">Cancel</button>
                 <button class="btn btn-primary" onclick="saveGistSetup()">Save &amp; Connect</button>
             </div>
         </div>
     </div>
-        </div>
-    </div>
+
+</div><!-- /app-shell -->
 
     <!-- Receipt Modal for full-size viewing -->
     <div class="receipt-modal" id="receiptModal" onclick="closeReceiptModal()">
@@ -1244,6 +1141,34 @@
             
             <div class="payment-list" id="paymentList">
                 <div class="payment-empty">No reports submitted yet</div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Email Reports Modal -->
+    <div class="email-modal" id="emailModal" onclick="if(event.target===this)closeEmailModal()">
+        <div class="email-modal-box">
+            <div class="email-modal-header">
+                <h2>✉️ Email Reports</h2>
+                <button class="btn btn-secondary btn-small" onclick="closeEmailModal()">Close</button>
+            </div>
+            <div class="email-modal-body">
+                <div class="email-hint" id="emailHint">
+                    📱 On mobile, tapping Send opens the native share sheet — pick Mail, Messages, or any app to attach PDFs directly.<br>
+                    🖥 On desktop, PDFs download and your mail app opens with the subject pre-filled.
+                </div>
+                <div class="email-select-all-row">
+                    <span id="emailSelCount">0 selected</span>
+                    <div style="display:flex;gap:12px;">
+                        <button onclick="emailSelectAll()">Select All</button>
+                        <button onclick="emailSelectNone()">None</button>
+                    </div>
+                </div>
+                <div id="emailReportList"></div>
+            </div>
+            <div class="email-modal-footer">
+                <button class="btn btn-secondary" style="flex:1;" onclick="closeEmailModal()">Cancel</button>
+                <button class="btn btn-primary" style="flex:2;" onclick="emailSelectedReports()">✉️ Send Selected</button>
             </div>
         </div>
     </div>
@@ -1681,6 +1606,7 @@
 
                 calculateMileage();
                 calculateTotal();
+                sortExpensesByCategory();
             } catch (e) {
                 console.error('Failed to load saved data:', e);
                 addExpense();
@@ -1741,6 +1667,20 @@
             calculateTotal();
         }
 
+        function sortExpensesByCategory() {
+            const list = document.getElementById('expenseList');
+            const entries = Array.from(list.querySelectorAll('.expense-entry'));
+            entries.sort((a, b) => {
+                const catA = a.querySelector('.expense-category').value;
+                const catB = b.querySelector('.expense-category').value;
+                const dateA = a.querySelector('.expense-date').value;
+                const dateB = b.querySelector('.expense-date').value;
+                return catA.localeCompare(catB) || dateA.localeCompare(dateB);
+            });
+            entries.forEach(e => list.appendChild(e));
+            resequenceExpenses();
+        }
+
         function resequenceExpenses() {
             const entries = document.querySelectorAll('.expense-entry');
             entries.forEach((entry, index) => {
@@ -1757,51 +1697,57 @@
         function addExpenseWithId(expenseId) {
             const expenseHTML = `
                 <div class="expense-entry" id="expense-${expenseId}">
-                    <div class="form-group" style="position: relative;">
-                        <label>Date</label>
-                        <input type="date" class="expense-date" required>
-                        <span class="expense-seq-num" style="position: absolute; top: 0; right: 0; background: #1a237e; color: white; font-size: 11px; font-weight: 700; padding: 2px 7px; border-radius: 10px; line-height: 1.6;">-</span>
+                    <span class="expense-seq-num">-</span>
+
+                    <!-- Fields: 2-col mobile, 4-col desktop -->
+                    <div class="expense-fields">
+                        <div class="form-group" style="position:relative;">
+                            <label>Date</label>
+                            <input type="date" class="expense-date" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Category</label>
+                            <select class="expense-category">
+                                <option value="Hotel">Hotel</option>
+                                <option value="Meals">Meals</option>
+                                <option value="Car Rental">Car Rental</option>
+                                <option value="Airfare">Airfare</option>
+                                <option value="Gas/Fuel">Gas/Fuel</option>
+                                <option value="Parking">Parking</option>
+                                <option value="Tolls">Tolls</option>
+                                <option value="Taxi/Uber">Taxi/Uber</option>
+                                <option value="Office Supplies">Office Supplies</option>
+                                <option value="Internet/Phone">Internet/Phone</option>
+                                <option value="Other">Other</option>
+                            </select>
+                        </div>
+                        <div class="form-group">
+                            <label>Description</label>
+                            <input type="text" class="expense-description" placeholder="Brief description">
+                        </div>
+                        <div class="form-group">
+                            <label>Amount ($)</label>
+                            <input type="number" class="expense-amount" placeholder="0.00" step="0.01" min="0" oninput="calculateTotal()">
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label>Category</label>
-                        <select class="expense-category">
-                            <option value="Hotel">Hotel</option>
-                            <option value="Meals">Meals</option>
-                            <option value="Car Rental">Car Rental</option>
-                            <option value="Airfare">Airfare</option>
-                            <option value="Gas/Fuel">Gas/Fuel</option>
-                            <option value="Parking">Parking</option>
-                            <option value="Tolls">Tolls</option>
-                            <option value="Taxi/Uber">Taxi/Uber</option>
-                            <option value="Office Supplies">Office Supplies</option>
-                            <option value="Internet/Phone">Internet/Phone</option>
-                            <option value="Other">Other</option>
-                        </select>
-                    </div>
-                    <div class="form-group">
-                        <label>Description</label>
-                        <input type="text" class="expense-description" placeholder="Brief description">
-                    </div>
-                    <div class="form-group">
-                        <label>Amount ($)</label>
-                        <input type="number" class="expense-amount" placeholder="0.00" step="0.01" min="0" oninput="calculateTotal()">
-                    </div>
-                    <div class="form-group">
-                        <label>Receipt Photo</label>
-                        <div class="receipt-buttons">
+
+                    <!-- Buttons: two rows -->
+                    <div class="expense-btns">
+                        <div class="expense-btns-row">
                             <button class="btn btn-secondary btn-small" onclick="triggerCamera(${expenseId}, event)">📷 Camera</button>
                             <button class="btn btn-secondary btn-small" onclick="triggerGallery(${expenseId}, event)">🖼️ Gallery</button>
                             <button class="btn btn-secondary btn-small" id="edit-btn-${expenseId}" style="display:none;" onclick="openCropModal(${expenseId}, event)">✏️ Edit</button>
-                            <button class="btn btn-danger btn-small" id="delete-btn-${expenseId}" style="display:none;" onclick="deleteReceipt(${expenseId}, event)">🗑️ Delete Photo</button>
                         </div>
-                        <input type="file" id="file-camera-${expenseId}" class="expense-receipt" accept="image/*" capture="environment" style="display:none;" onchange="handleReceiptUpload(this, ${expenseId})">
-                        <input type="file" id="file-gallery-${expenseId}" class="expense-receipt" accept="image/*" style="display:none;" onchange="handleReceiptUpload(this, ${expenseId})">
-                        <div class="receipt-preview" id="preview-${expenseId}"></div>
+                        <div class="expense-btns-row">
+                            <button class="btn btn-danger btn-small" id="delete-btn-${expenseId}" style="display:none;" onclick="deleteReceipt(${expenseId}, event)">🗑️ Delete Photo</button>
+                            <button class="btn btn-danger btn-small" onclick="removeExpense(${expenseId})">✕ Remove Expense</button>
+                        </div>
                     </div>
-                    <div class="form-group">
-                        <label style="opacity: 0;">Action</label>
-                        <button class="btn btn-danger" onclick="removeExpense(${expenseId})">Remove Expense</button>
-                    </div>
+
+                    <!-- Photo preview -->
+                    <input type="file" id="file-camera-${expenseId}" class="expense-receipt" accept="image/*" capture="environment" style="display:none;" onchange="handleReceiptUpload(this, ${expenseId})">
+                    <input type="file" id="file-gallery-${expenseId}" class="expense-receipt" accept="image/*" style="display:none;" onchange="handleReceiptUpload(this, ${expenseId})">
+                    <div class="receipt-preview" id="preview-${expenseId}"></div>
                 </div>
             `;
             document.getElementById('expenseList').insertAdjacentHTML('beforeend', expenseHTML);
@@ -2714,6 +2660,8 @@
             if (!el) return;
             el.className = 'backup-status ' + state;
             el.textContent = text;
+            const dot = document.getElementById('headerSyncDot');
+            if (dot) dot.className = 'header-sync-dot ' + state;
         }
 
         // ── Build / apply data object ──────────────────────────────────────────────
@@ -3081,7 +3029,7 @@
             };
             const currentReport = document.getElementById('reportNumber').value;
             if (currentReport) {
-                showConfirm('Discard Current Report?', 'Loading will replace the current form data.\n\nContinue?', doLoad, doLoad);
+                showConfirm('Discard Current Report?', 'Loading will replace the current form data.\n\nContinue?', doLoad, null);
             } else {
                 doLoad();
             }
@@ -3095,12 +3043,11 @@
             if (!reportNumber || !companyName) return;
 
             const cleanNum   = reportNumber.replace(/[^a-z0-9]/gi, '_');
-            const cleanCo    = companyName.replace(/[^a-z0-9]/gi, '_');
+            const cleanCo    = companyName.replace(/[^a-z0-9]/gi, '_').substring(0, 8).replace(/_+$/, '');
             const dateStr    = (serviceDateFrom || new Date().toISOString().split('T')[0]);
-            const fileName   = `ORICS_${cleanCo}_${cleanNum}_${dateStr}.json`;
-            const pdfFileName = `ORICS_${cleanCo}_${cleanNum}_${dateStr}.pdf`;
+            const fileName   = `${cleanNum}_${cleanCo}_Orics.json`;
+            const pdfFileName = `${cleanNum}_${cleanCo}_Orics.pdf`;
 
-            // Store full report JSON (form + photos + PDF) in memory for JSON file save
             const reportFile = {
                 fileVersion: '1.0',
                 savedDate:   new Date().toISOString(),
@@ -3109,7 +3056,6 @@
                 pdfData:     pdfDataUri || null
             };
 
-            // Metadata record for payment tracking — no binary data
             const existingIndex = submittedReports.findIndex(r => r.reportNumber === reportNumber);
             const meta = {
                 id:            existingIndex >= 0 ? submittedReports[existingIndex].id : Date.now(),
@@ -3133,10 +3079,217 @@
 
             const trackIdx = existingIndex >= 0 ? existingIndex : 0;
 
-            // Save PDF first via file picker, then save JSON report file
+            // Store PDF blob in IndexedDB for later email use
+            if (pdfDataUri) {
+                try {
+                    const base64  = pdfDataUri.split(',')[1];
+                    const binary  = atob(base64);
+                    const bytes   = new Uint8Array(binary.length);
+                    for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                    const pdfBlob = new Blob([bytes], { type: 'application/pdf' });
+                    idbPut('pdf_' + reportNumber, pdfBlob);
+                } catch(e) { console.warn('Could not store PDF in IDB:', e); }
+            }
+
+            // Save PDF first via file picker, then silently overwrite JSON if already saved
             savePDFFile(pdfDataUri, pdfFileName, trackIdx, function() {
-                saveReportFile(reportFile, trackIdx);
+                saveReportFileSilent(reportFile, trackIdx);
             });
+        }
+
+        // ── Email Reports ──────────────────────────────────────────────────────────
+
+        let emailPdfAvailability = {}; // cache: reportNumber -> bool
+
+        async function openEmailModal() {
+            if (submittedReports.length === 0) {
+                showDialog('No Reports', 'No reports found. Export a PDF first to make reports available for emailing.');
+                return;
+            }
+            document.getElementById('emailModal').classList.add('show');
+            await buildEmailReportList();
+        }
+
+        function closeEmailModal() {
+            document.getElementById('emailModal').classList.remove('show');
+        }
+
+        async function buildEmailReportList() {
+            const listEl = document.getElementById('emailReportList');
+            listEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--ash);font-size:13px;">Checking PDF availability…</div>';
+            emailPdfAvailability = {};
+
+            // Check IDB availability for each report
+            for (const report of submittedReports) {
+                try {
+                    const blob = await idbGet('pdf_' + report.reportNumber);
+                    emailPdfAvailability[report.reportNumber] = !!(blob && blob.size > 0);
+                } catch(e) {
+                    emailPdfAvailability[report.reportNumber] = false;
+                }
+            }
+
+            let html = '';
+            submittedReports.forEach((report, idx) => {
+                const hasPdf = emailPdfAvailability[report.reportNumber];
+                const paidLabel = report.paid ? ' · ✓ Paid' : '';
+                html += `
+                    <div class="email-report-item${hasPdf ? '' : ' no-pdf'}" id="email-item-${idx}"
+                         onclick="${hasPdf ? `toggleEmailItem(${idx})` : `promptPickPdfForReport(${idx})`}">
+                        <div class="email-check" id="email-check-${idx}"></div>
+                        <div class="email-report-info">
+                            <div class="email-report-name">${report.companyName}</div>
+                            <div class="email-report-meta">#${report.reportNumber} · ${report.date} · ${report.amount}${paidLabel}</div>
+                        </div>
+                        <span class="email-pdf-badge ${hasPdf ? 'ready' : 'missing'}" id="email-badge-${idx}">${hasPdf ? 'PDF ✓' : '📂 Pick PDF'}</span>
+                    </div>`;
+            });
+            listEl.innerHTML = html;
+            updateEmailSelCount();
+        }
+
+        function promptPickPdfForReport(idx) {
+            const report = submittedReports[idx];
+            if (!report) return;
+
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.pdf,application/pdf';
+            input.onchange = async function() {
+                const file = input.files && input.files[0];
+                if (!file) return;
+
+                // Show loading state
+                const badge = document.getElementById('email-badge-' + idx);
+                if (badge) badge.textContent = '⏳';
+
+                try {
+                    const arrayBuf = await file.arrayBuffer();
+                    const blob = new Blob([arrayBuf], { type: 'application/pdf' });
+                    await idbPut('pdf_' + report.reportNumber, blob);
+
+                    // Mark as available and select automatically
+                    emailPdfAvailability[report.reportNumber] = true;
+                    const item  = document.getElementById('email-item-' + idx);
+                    const check = document.getElementById('email-check-' + idx);
+                    if (item) {
+                        item.classList.remove('no-pdf');
+                        item.onclick = function() { toggleEmailItem(idx); };
+                        item.classList.add('selected');
+                    }
+                    if (check) check.textContent = '✓';
+                    if (badge) { badge.textContent = 'PDF ✓'; badge.className = 'email-pdf-badge ready'; }
+                    updateEmailSelCount();
+                } catch(e) {
+                    const badge2 = document.getElementById('email-badge-' + idx);
+                    if (badge2) { badge2.textContent = '📂 Pick PDF'; badge2.className = 'email-pdf-badge missing'; }
+                    showDialog('Error', 'Could not load PDF: ' + e.message);
+                }
+            };
+            input.click();
+        }
+
+        function toggleEmailItem(idx) {
+            const item  = document.getElementById('email-item-' + idx);
+            const check = document.getElementById('email-check-' + idx);
+            if (!item) return;
+            const selected = item.classList.toggle('selected');
+            check.textContent = selected ? '✓' : '';
+            updateEmailSelCount();
+        }
+
+        function emailSelectAll() {
+            submittedReports.forEach((r, idx) => {
+                if (!emailPdfAvailability[r.reportNumber]) return;
+                const item  = document.getElementById('email-item-' + idx);
+                const check = document.getElementById('email-check-' + idx);
+                if (item) { item.classList.add('selected'); check.textContent = '✓'; }
+            });
+            updateEmailSelCount();
+        }
+
+        function emailSelectNone() {
+            submittedReports.forEach((r, idx) => {
+                const item  = document.getElementById('email-item-' + idx);
+                const check = document.getElementById('email-check-' + idx);
+                if (item) { item.classList.remove('selected'); check.textContent = ''; }
+            });
+            updateEmailSelCount();
+        }
+
+        function updateEmailSelCount() {
+            const count = document.querySelectorAll('.email-report-item.selected').length;
+            document.getElementById('emailSelCount').textContent = count === 1 ? '1 selected' : `${count} selected`;
+        }
+
+        async function emailSelectedReports() {
+            const selected = [];
+            submittedReports.forEach((report, idx) => {
+                const item = document.getElementById('email-item-' + idx);
+                if (item && item.classList.contains('selected')) selected.push(report);
+            });
+
+            if (selected.length === 0) {
+                showDialog('Nothing Selected', 'Please select at least one report to email.');
+                return;
+            }
+
+            // Gather blobs from IDB
+            const files = [];
+            const missing = [];
+            for (const report of selected) {
+                try {
+                    const blob = await idbGet('pdf_' + report.reportNumber);
+                    if (blob && blob.size > 0) {
+                        files.push(new File([blob], report.pdfFileName || `Report_${report.reportNumber}.pdf`, { type: 'application/pdf' }));
+                    } else {
+                        missing.push(report.reportNumber);
+                    }
+                } catch(e) { missing.push(report.reportNumber); }
+            }
+
+            if (missing.length > 0 && files.length === 0) {
+                showDialog('PDFs Not Found', `Could not find PDFs for report(s): ${missing.join(', ')}.\n\nPlease re-export those reports as PDF first, then try again.`);
+                return;
+            }
+
+            const companies = [...new Set(selected.map(r => r.companyName))].join(', ');
+            const subject   = `ORICS Expense Report – ${companies}`;
+            const body      = `Hi,\n\nPlease find the attached ORICS expense report(s) for: ${companies}.\n\nTotal: ${selected.map(r => `${r.companyName} ${r.amount}`).join(', ')}.\n\nThank you.`;
+
+            closeEmailModal();
+
+            // Mobile: native share sheet with file attachments
+            if (files.length > 0 && navigator.canShare && navigator.canShare({ files })) {
+                try {
+                    await navigator.share({ files, title: subject, text: body });
+                    return;
+                } catch(e) {
+                    if (e.name === 'AbortError') return; // user cancelled
+                    console.warn('navigator.share failed, falling back:', e);
+                }
+            }
+
+            // Desktop / fallback: download PDFs + open mailto
+            for (const file of files) {
+                const url = URL.createObjectURL(file);
+                const a   = document.createElement('a');
+                a.href = url; a.download = file.name;
+                document.body.appendChild(a); a.click();
+                document.body.removeChild(a);
+                setTimeout(() => URL.revokeObjectURL(url), 2000);
+            }
+
+            // Small delay so downloads start, then open mail client
+            setTimeout(() => {
+                const mailtoUri = `mailto:?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+                window.location.href = mailtoUri;
+                if (missing.length > 0) {
+                    setTimeout(() => {
+                        showDialog('Partial Success', `${files.length} PDF(s) downloaded.\n\nCould not find PDF for report(s): ${missing.join(', ')}. Re-export those first.`);
+                    }, 800);
+                }
+            }, 600);
         }
 
         // ── IndexedDB: persist FileSystemDirectoryHandle across sessions ──────────
@@ -3244,6 +3397,32 @@
         }
 
         // ── Save Report File ───────────────────────────────────────────────────────
+        // Silent JSON save — only overwrites if a handle was already stored; no dialog, no new picker
+        async function saveReportFileSilent(reportFile, trackingIndex) {
+            const json = JSON.stringify(reportFile, null, 2);
+            const reportNumber = reportFile.formData && reportFile.formData.reportNumber;
+            if (reportNumber && 'showSaveFilePicker' in window) {
+                try {
+                    const handle = await idbGet('rfh_' + reportNumber);
+                    if (handle) {
+                        const writable = await handle.createWritable();
+                        await writable.write(json);
+                        await writable.close();
+                        if (submittedReports[trackingIndex]) {
+                            const r = submittedReports[trackingIndex];
+                            setLocalFileStatus(r.reportNumber, true, r.hasPdfFile);
+                            r.hasFile = true;
+                            updatePaymentList();
+                        }
+                    }
+                    // If no stored handle, skip silently — user hasn't saved JSON yet
+                    return;
+                } catch(e) { console.warn('Silent JSON save failed:', e.message); }
+            }
+            // Mobile: no file handle API, skip silently — user can save JSON manually
+            return;
+        }
+
         async function saveReportFile(reportFile, trackingIndex) {
             const json     = JSON.stringify(reportFile, null, 2);
             const fileName = reportFile.fileName;
@@ -3271,6 +3450,9 @@
 
                     const fileHandle = await window.showSaveFilePicker(pickerOpts);
                     await idbPut('lastFile', fileHandle);
+                    // Remember handle for this report so future PDF exports can overwrite silently
+                    const rn = reportFile.formData && reportFile.formData.reportNumber;
+                    if (rn) await idbPut('rfh_' + rn, fileHandle);
 
                     // Also store directory handle for auto-open (resolve via showDirectoryPicker would
                     // require user gesture; instead we rely on startIn + manual open for first time)
@@ -3397,64 +3579,91 @@
             let totalOwed = 0;
             let html = '';
 
-            // Show newest first (already sorted)
             submittedReports.forEach((report, index) => {
                 const paidClass = report.paid ? 'paid' : '';
                 const amount = parseFloat(report.amount.replace('$', '').replace(',', '')) || 0;
-                
-                if (!report.paid) {
-                    totalOwed += amount;
-                }
+                if (!report.paid) totalOwed += amount;
 
-                const hasPdf = report.hasPdfFile ? 'has-pdf' : '';
-                const checkStyle = report.paid
-                    ? 'background:#28a745; color:white; border-color:#28a745;'
-                    : 'background:white; color:#ccc; border-color:#ccc;';
-                const fileBtnStyle = report.hasPdfFile ? 'color:#c0392b;' : 'opacity:0.3;';
-                const loadBtnStyle = report.hasFile ? '' : 'opacity:0.3;';
+                const paidBtnStyle = report.paid
+                    ? 'color:var(--green);'
+                    : 'color:var(--ash);';
+                const paidLabel = report.paid ? '✓ Paid' : 'Paid?';
+                const fileDim  = report.hasPdfFile ? '' : 'opacity:0.3;';
+                const loadDim  = report.hasFile    ? '' : 'opacity:0.3;';
 
                 html += `
-                    <div class="payment-item ${paidClass} ${hasPdf}" style="display:flex; align-items:stretch; padding:0;">
-                        <div style="flex:0 0 auto; width:220px; padding:12px 15px; overflow:hidden;">
-                            <div class="payment-customer-name">${report.companyName}</div>
-                            <div style="display:flex; gap:12px; align-items:center; margin-top:4px; flex-wrap:nowrap;">
-                                <span class="payment-date">${report.date}</span>
-                                <span class="payment-report-num">#${report.reportNumber}</span>
-                                <span class="payment-amount">${report.amount}</span>
+                    <div class="payment-item ${paidClass}" id="pi-${index}" onclick="togglePaymentItem(${index})">
+                        <div class="payment-item-track">
+                            <div class="payment-item-text">
+                                <div class="pi-name">${report.companyName}</div>
+                                <div class="pi-meta">
+                                    <span class="payment-date">${report.date}</span>
+                                    <span class="payment-report-num">#${report.reportNumber}</span>
+                                    <span class="payment-amount">${report.amount}</span>
+                                </div>
+                            </div>
+                            <div class="payment-item-btns">
+                                <button class="payment-action-btn" style="${fileDim}"
+                                    onclick="paymentBtnClick(event,${index},()=>openReportPDF(${index}))">
+                                    <svg width="18" height="22" viewBox="0 0 26 30" fill="none">
+                                        <rect x="1" y="1" width="18" height="24" rx="2" fill="white" stroke="#c0392b" stroke-width="1.5"/>
+                                        <path d="M5 1v5a1 1 0 001 1h5" stroke="#c0392b" stroke-width="1.5" fill="none"/>
+                                        <rect x="0" y="15" width="26" height="10" rx="2" fill="#c0392b"/>
+                                        <text x="13" y="23.5" text-anchor="middle" font-family="Arial,sans-serif" font-size="7.5" font-weight="bold" fill="white">PDF</text>
+                                    </svg>
+                                    PDF
+                                </button>
+                                <button class="payment-action-btn" style="${loadDim}"
+                                    onclick="paymentBtnClick(event,${index},()=>loadReportFromTracking(${index}))">
+                                    <svg width="18" height="22" viewBox="0 0 26 30" fill="none">
+                                        <rect x="1" y="5" width="24" height="20" rx="2" fill="white" stroke="#2563eb" stroke-width="1.5"/>
+                                        <path d="M1 11h24" stroke="#2563eb" stroke-width="1.5"/>
+                                        <path d="M5 5V3a1 1 0 011-1h4a1 1 0 011 1v2" stroke="#2563eb" stroke-width="1.5" fill="none"/>
+                                        <path d="M13 18l-4-4m0 0l4-4m-4 4h8" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+                                    </svg>
+                                    LOAD
+                                </button>
+                                <button class="payment-action-btn" style="${paidBtnStyle}"
+                                    onclick="paymentBtnClick(event,${index},()=>togglePaymentStatus(${index}))">
+                                    <span style="font-size:17px;">✓</span>
+                                    ${paidLabel}
+                                </button>
+                                <button class="payment-action-btn" style="color:#c0392b;"
+                                    onclick="paymentBtnClick(event,${index},()=>deleteReport(${index}))">
+                                    <span style="font-size:17px;">🗑</span>
+                                    DEL
+                                </button>
                             </div>
                         </div>
-                        <button class="payment-action-btn" onclick="event.stopPropagation(); openReportPDF(${index})" title="View PDF" style="${fileBtnStyle}">
-                            <svg width="26" height="30" viewBox="0 0 26 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect x="1" y="1" width="18" height="24" rx="2" fill="white" stroke="#c0392b" stroke-width="1.5"/>
-                                <path d="M5 1v5a1 1 0 001 1h5" stroke="#c0392b" stroke-width="1.5" fill="none"/>
-                                <rect x="0" y="15" width="26" height="10" rx="2" fill="#c0392b"/>
-                                <text x="13" y="23.5" text-anchor="middle" font-family="Arial,sans-serif" font-size="7.5" font-weight="bold" fill="white">PDF</text>
-                            </svg>
-                            <span>PDF</span>
-                        </button>
-                        <button class="payment-action-btn" onclick="event.stopPropagation(); loadReportFromTracking(${index})" title="Load Report" style="${loadBtnStyle}">
-                            <svg width="26" height="30" viewBox="0 0 26 30" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <rect x="1" y="5" width="24" height="20" rx="2" fill="white" stroke="#2563eb" stroke-width="1.5"/>
-                                <path d="M1 11h24" stroke="#2563eb" stroke-width="1.5"/>
-                                <path d="M5 5V3a1 1 0 011-1h4a1 1 0 011 1v2" stroke="#2563eb" stroke-width="1.5" fill="none"/>
-                                <path d="M13 18l-4-4m0 0l4-4m-4 4h8" stroke="#2563eb" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-                            </svg>
-                            <span>LOAD</span>
-                        </button>
-                        <div class="payment-check-btn" onclick="event.stopPropagation(); togglePaymentStatus(${index})">
-                            <div style="width:36px; height:36px; border-radius:50%; border:2px solid; display:flex; align-items:center; justify-content:center; font-size:20px; transition:all 0.2s; ${checkStyle}">
-                                ✓
-                            </div>
-                        </div>
-                        <button class="payment-action-btn" onclick="event.stopPropagation(); deleteReport(${index})" title="Delete Report" style="color:#c0392b; font-size:20px; padding: 0 10px;">
-                            🗑
-                        </button>
                     </div>
                 `;
             });
 
             listContainer.innerHTML = html;
             document.getElementById('paymentTotalOwed').textContent = `$${totalOwed.toFixed(2)}`;
+        }
+
+        function togglePaymentItem(index) {
+            const clicked = document.getElementById('pi-' + index);
+            const isOpen  = clicked.classList.contains('open');
+            // Close all
+            document.querySelectorAll('.payment-item.open').forEach(el => el.classList.remove('open'));
+            // Open this one if it wasn't already
+            if (!isOpen) clicked.classList.add('open');
+        }
+
+        // First touch on a button: open the card. Second touch: fire the action.
+        function paymentBtnClick(e, index, action) {
+            e.stopPropagation();
+            const item = document.getElementById('pi-' + index);
+            if (!item.classList.contains('open')) {
+                // First touch — just open
+                document.querySelectorAll('.payment-item.open').forEach(el => el.classList.remove('open'));
+                item.classList.add('open');
+            } else {
+                // Second touch — fire
+                action();
+            }
         }
 
         function togglePaymentStatus(index) {
@@ -3494,10 +3703,10 @@
             });
 
             if (allPaid && submittedReports.length > 0) {
-                button.classList.add('all-paid');
+                button.style.background = 'var(--green)';
                 amountSpan.textContent = '✅ All Paid!';
             } else {
-                button.classList.remove('all-paid');
+                button.style.background = '';
                 amountSpan.textContent = `$${totalOwed.toFixed(2)} Owed`;
             }
         }
@@ -3643,46 +3852,83 @@
                 yPos = doc.lastAutoTable.finalY + 10;
             }
 
-            // Other Expenses Section
-            const expenseData = [];
-            const expenseEntries = document.querySelectorAll('.expense-entry');
-            
-            let expenseSeq = 0;
-            expenseEntries.forEach(entry => {
-                const date = entry.querySelector('.expense-date').value;
+            // Sort expense entries in the UI by category then date before generating
+            sortExpensesByCategory();
+
+            // Other Expenses Section — sorted by category+date with subtotals
+            const rawExpenses = [];
+            document.querySelectorAll('.expense-entry').forEach(entry => {
+                const date     = entry.querySelector('.expense-date').value;
                 const category = entry.querySelector('.expense-category').value;
-                const description = entry.querySelector('.expense-description').value;
-                const amount = parseFloat(entry.querySelector('.expense-amount').value) || 0;
-                
-                if (amount > 0 || description) {
-                    expenseSeq++;
-                    expenseData.push([
-                        expenseSeq,
-                        new Date(date).toLocaleDateString(),
-                        category,
-                        description || '-',
-                        `$${amount.toFixed(2)}`
-                    ]);
-                }
+                const desc     = entry.querySelector('.expense-description').value;
+                const amount   = parseFloat(entry.querySelector('.expense-amount').value) || 0;
+                const eid      = entry.id.replace('expense-', '');
+                if (amount > 0 || desc) rawExpenses.push({ date, category, desc, amount, eid });
             });
 
-            if (expenseData.length > 0) {
-                doc.setFontSize(12);
+            // Sort by category then date — must match UI sort order
+            rawExpenses.sort((a, b) =>
+                a.category.localeCompare(b.category) || a.date.localeCompare(b.date)
+            );
+
+            // Build sorted seq map for receipt labeling (declared here so receipts section can use it)
+            const sortedSeqMap = {};
+            rawExpenses.forEach((e, idx) => { sortedSeqMap[e.eid] = idx + 1; });
+
+            if (rawExpenses.length > 0) {
+                // Build rows with inline subtotals; track which row indices are subtotals
+                const expenseBody = [];
+                const subtotalRows = new Set();
+                let seq = 0, i = 0;
+                while (i < rawExpenses.length) {
+                    const cat = rawExpenses[i].category;
+                    let catTotal = 0;
+                    while (i < rawExpenses.length && rawExpenses[i].category === cat) {
+                        seq++;
+                        catTotal += rawExpenses[i].amount;
+                        expenseBody.push([
+                            seq,
+                            new Date(rawExpenses[i].date).toLocaleDateString(),
+                            rawExpenses[i].category,
+                            rawExpenses[i].desc || '—',
+                            `$${rawExpenses[i].amount.toFixed(2)}`
+                        ]);
+                        i++;
+                    }
+                    subtotalRows.add(expenseBody.length); // next row = subtotal
+                    expenseBody.push(['', '', '', `${cat} Subtotal`, `$${catTotal.toFixed(2)}`]);
+                }
+
+                doc.setFontSize(11);
                 doc.setFont(undefined, 'bold');
                 doc.text('OTHER EXPENSES', 20, yPos);
-                yPos += 8;
+                yPos += 6;
 
                 doc.autoTable({
                     startY: yPos,
                     head: [['#', 'Date', 'Category', 'Description', 'Amount']],
-                    body: expenseData,
+                    body: expenseBody,
                     theme: 'grid',
-                    headStyles: { fillColor: [26, 35, 126] },
-                    columnStyles: { 0: { cellWidth: 10, halign: 'center' } },
-                    margin: { left: 20, right: 20 }
+                    headStyles: { fillColor: [26, 35, 126], fontSize: 8, cellPadding: 2 },
+                    styles: { fontSize: 8, cellPadding: 1.8 },
+                    columnStyles: {
+                        0: { cellWidth: 8,  halign: 'center' },
+                        1: { cellWidth: 22 },
+                        2: { cellWidth: 30 },
+                        3: { cellWidth: 'auto' },
+                        4: { cellWidth: 22, halign: 'right' }
+                    },
+                    margin: { left: 20, right: 20 },
+                    didParseCell: function(data) {
+                        if (data.section === 'body' && subtotalRows.has(data.row.index)) {
+                            data.cell.styles.fontStyle = 'bold';
+                            data.cell.styles.fillColor = [235, 240, 255];
+                            data.cell.styles.textColor = [26, 35, 126];
+                        }
+                    }
                 });
 
-                yPos = doc.lastAutoTable.finalY + 10;
+                yPos = doc.lastAutoTable.finalY + 8;
             }
 
             // Advances Section
@@ -3721,11 +3967,11 @@
                 yPos = doc.lastAutoTable.finalY + 10;
             }
 
-            // Total - MOVED BEFORE RECEIPT IMAGES
+            // Total — no forced page break, always follows table directly
             const totalAmount = document.getElementById('totalAmount').textContent;
             
-            // Check if we need a new page for the total
-            if (yPos > 250) {
+            // Only start new page if really no room at all
+            if (yPos > 272) {
                 doc.addPage();
                 yPos = 20;
             }
@@ -3764,21 +4010,20 @@
                 const spacing = 10;
                 let maxHeightInRow = 0; // Track tallest image in current row
 
-                // Build a map of expenseId -> sequence number (only counting expenses with data)
-                const expenseSeqMap = {};
-                let seqCounter = 0;
-                document.querySelectorAll('.expense-entry').forEach(entry => {
-                    const amt = parseFloat(entry.querySelector('.expense-amount').value) || 0;
-                    const desc = entry.querySelector('.expense-description').value;
-                    if (amt > 0 || desc) {
-                        seqCounter++;
-                        const eid = entry.id.replace('expense-', '');
-                        expenseSeqMap[eid] = seqCounter;
-                    }
+                // Build a map of expenseId -> sequence number using the sorted order
+                const expenseSeqMap = sortedSeqMap || {};
+
+                // Process receipts in sorted order
+                const sortedReceiptIds = rawExpenses
+                    .map(e => e.eid)
+                    .filter(eid => receiptImages[eid]);
+                // Also include any receipt ids not in rawExpenses (shouldn't happen, but safety)
+                Object.keys(receiptImages).forEach(eid => {
+                    if (!sortedReceiptIds.includes(eid)) sortedReceiptIds.push(eid);
                 });
 
                 // Process receipts sequentially to handle async PDF conversions
-                for (const expenseId of receiptIds) {
+                for (const expenseId of sortedReceiptIds) {
                     if (receiptImages[expenseId]) {
                         // Get the expense details for labeling
                         const expenseEntry = document.getElementById(`expense-${expenseId}`);
@@ -3875,10 +4120,10 @@
             }
 
             const cleanNum   = reportNumber.replace(/[^a-z0-9]/gi, '_');
-            const cleanCo    = companyName.replace(/[^a-z0-9]/gi, '_');
+            const cleanCo    = companyName.replace(/[^a-z0-9]/gi, '_').substring(0, 8).replace(/_+$/, '');
             const dateStr    = document.getElementById('serviceDateFrom').value || new Date().toISOString().split('T')[0];
-            const fileName   = `ORICS_${cleanCo}_${cleanNum}_${dateStr}.json`;
-            const pdfFileName = `ORICS_${cleanCo}_${cleanNum}_${dateStr}.pdf`;
+            const fileName   = `${cleanNum}_${cleanCo}_Orics.json`;
+            const pdfFileName = `${cleanNum}_${cleanCo}_Orics.pdf`;
 
             const reportFile = {
                 fileVersion: '1.0',
@@ -3966,7 +4211,7 @@
             };
             const currentReport = document.getElementById('reportNumber').value;
             if (currentReport) {
-                showConfirm('Discard Current Report?', 'Loading will replace the current form data.\n\nContinue?', doLoad, doLoad);
+                showConfirm('Discard Current Report?', 'Loading will replace the current form data.\n\nContinue?', doLoad, null);
             } else {
                 doLoad();
             }
@@ -4047,6 +4292,7 @@
                 calculateMileage();
                 calculateTotal();
                 resequenceExpenses();
+                sortExpensesByCategory();
                 
                 // Save to localStorage as well
                 saveData();
@@ -4056,6 +4302,19 @@
                 showDialog('Error', 'Failed to load report file:\n' + e.message);
             }
         }
+
+        // ── Tab Navigation ─────────────────────────────────────────────────────────
+        function switchTab(tabId) {
+            document.querySelectorAll('.tab-panel').forEach(p => p.classList.remove('active'));
+            document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById(tabId).classList.add('active');
+            document.querySelector(`[data-tab="${tabId}"]`).classList.add('active');
+        }
+
+        document.querySelectorAll('.tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => switchTab(btn.dataset.tab));
+        });
+
     </script>
 </body>
 </html>
