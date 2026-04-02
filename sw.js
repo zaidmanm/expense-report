@@ -1,97 +1,127 @@
-// ── ORICS Expense Report — Service Worker ─────────────────────────────────────
-// Strategy:
-//   • index.html  → Network-first: always try to fetch fresh, cache as fallback.
-//                   This guarantees the latest version is served when online,
-//                   and a working offline copy when not.
-//   • CDN assets  → Cache-first: libraries (jsPDF, pdf.js, litepicker …) never
-//                   change at a given URL, so cache them forever.
-//   • Everything else → Network-only (no caching).
+// ═══════════════════════════════════════════════════════════════════
+//  RETROCADE — Service Worker
+//  GitHub: https://github.com/YOUR_USERNAME/YOUR_REPO
+// ───────────────────────────────────────────────────────────────────
 //
-// BUMP THIS VERSION STRING every time you deploy a new release.
-// The old cache is deleted on activate so users always get fresh code.
-// ──────────────────────────────────────────────────────────────────────────────
+//  HOW TO PUSH AN UPDATE TO ALL PLAYERS:
+//  ──────────────────────────────────────
+//  1. Edit index.html (or any asset) as needed
+//  2. Bump the VERSION string below  (e.g.  v1 → v2)
+//  3. Commit and push to GitHub:
+//       git add .
+//       git commit -m "chore: bump to v2"
+//       git push
+//
+//  What happens next (automatically):
+//  • GitHub Pages serves the new sw.js
+//  • Each player's browser detects the changed file on next visit
+//    (or within 60 seconds if the app is already open)
+//  • A yellow "UPDATE AVAILABLE — TAP TO INSTALL" banner appears
+//  • Tapping it applies the update instantly, no full re-download
+//
+// ═══════════════════════════════════════════════════════════════════
 
-const CACHE_VERSION = 'orics-v7';   // ← bump this on every deploy
+const VERSION = 'retrocade-v1';   // ← BUMP THIS NUMBER TO PUSH AN UPDATE
 
-const APP_SHELL = [
-    './index.html',
-    './',
+// Files to pre-cache on install (relative to the sw.js location)
+const PRECACHE = [
+  './',
+  './index.html',
+  './manifest.json',
+  './icon.svg',
 ];
 
-const CDN_ORIGINS = [
-    'cdnjs.cloudflare.com',
-    'cdn.jsdelivr.net',
-    'docs.opencv.org',
-    'fonts.googleapis.com',
-    'fonts.gstatic.com',
+// External assets cached on first use (Google Fonts, etc.)
+const RUNTIME_HOSTS = [
+  'fonts.googleapis.com',
+  'fonts.gstatic.com',
 ];
 
-// ── Install: pre-cache the app shell ──────────────────────────────────────────
-self.addEventListener('install', event => {
-    event.waitUntil(
-        caches.open(CACHE_VERSION).then(cache => cache.addAll(APP_SHELL))
+// ── Install: pre-cache core files ──────────────────────────────────
+self.addEventListener('install', e => {
+  e.waitUntil(
+    caches.open(VERSION)
+      .then(cache => cache.addAll(PRECACHE))
+      .then(() => {
+        console.log(`[SW] ${VERSION} installed`);
+        return self.skipWaiting(); // activate immediately, don't wait for old tabs to close
+      })
+  );
+});
+
+// ── Activate: delete all caches from previous versions ─────────────
+self.addEventListener('activate', e => {
+  e.waitUntil(
+    caches.keys().then(keys =>
+      Promise.all(
+        keys
+          .filter(k => k !== VERSION)
+          .map(k => {
+            console.log(`[SW] Deleting old cache: ${k}`);
+            return caches.delete(k);
+          })
+      )
+    ).then(() => {
+      console.log(`[SW] ${VERSION} active`);
+      return self.clients.claim(); // take control of all open tabs immediately
+    })
+  );
+});
+
+// ── Fetch: serve from cache, keep cache fresh ──────────────────────
+self.addEventListener('fetch', e => {
+  const url = new URL(e.request.url);
+
+  // Skip non-GET requests and browser extensions
+  if (e.request.method !== 'GET') return;
+  if (!url.protocol.startsWith('http')) return;
+
+  // NAVIGATION (HTML) — Network first so updates always land
+  // Falls back to cache if offline
+  if (e.request.mode === 'navigate') {
+    e.respondWith(
+      fetch(e.request)
+        .then(res => {
+          const clone = res.clone();
+          caches.open(VERSION).then(c => c.put(e.request, clone));
+          return res;
+        })
+        .catch(() => caches.match(e.request))
     );
-    // Take control immediately so the new SW is used right away
+    return;
+  }
+
+  // RUNTIME HOSTS (fonts, CDN) — Cache first, fetch & cache if missing
+  if (RUNTIME_HOSTS.some(h => url.hostname.includes(h))) {
+    e.respondWith(
+      caches.match(e.request).then(cached => {
+        if (cached) return cached;
+        return fetch(e.request).then(res => {
+          const clone = res.clone();
+          caches.open(VERSION).then(c => c.put(e.request, clone));
+          return res;
+        });
+      })
+    );
+    return;
+  }
+
+  // EVERYTHING ELSE (local assets) — Cache first
+  e.respondWith(
+    caches.match(e.request).then(cached =>
+      cached || fetch(e.request).then(res => {
+        const clone = res.clone();
+        caches.open(VERSION).then(c => c.put(e.request, clone));
+        return res;
+      })
+    )
+  );
+});
+
+// ── Message: triggered by applyUpdate() in the page ───────────────
+self.addEventListener('message', e => {
+  if (e.data === 'skipWaiting') {
+    console.log('[SW] skipWaiting — applying update now');
     self.skipWaiting();
-});
-
-// ── Activate: delete every old cache version ───────────────────────────────────
-self.addEventListener('activate', event => {
-    event.waitUntil(
-        caches.keys().then(keys =>
-            Promise.all(
-                keys.filter(k => k !== CACHE_VERSION).map(k => caches.delete(k))
-            )
-        ).then(() => self.clients.claim())   // take over existing tabs immediately
-    );
-});
-
-// ── Fetch ──────────────────────────────────────────────────────────────────────
-self.addEventListener('fetch', event => {
-    const { request } = event;
-    const url = new URL(request.url);
-
-    // Only handle GET requests
-    if (request.method !== 'GET') return;
-
-    // ── CDN assets: cache-first ─────────────────────────────────────────────
-    if (CDN_ORIGINS.some(o => url.hostname.includes(o))) {
-        event.respondWith(
-            caches.match(request).then(cached => {
-                if (cached) return cached;
-                return fetch(request).then(response => {
-                    if (response.ok) {
-                        const clone = response.clone();
-                        caches.open(CACHE_VERSION).then(c => c.put(request, clone));
-                    }
-                    return response;
-                }).catch(() => cached); // offline and not cached → nothing (lib fails gracefully)
-            })
-        );
-        return;
-    }
-
-    // ── App shell (index.html / same origin): network-first ────────────────
-    if (url.origin === self.location.origin) {
-        event.respondWith(
-            fetch(request)
-                .then(response => {
-                    // Cache the fresh response
-                    if (response.ok) {
-                        const clone = response.clone();
-                        caches.open(CACHE_VERSION).then(c => c.put(request, clone));
-                    }
-                    return response;
-                })
-                .catch(() => caches.match(request))  // offline → serve cached copy
-        );
-        return;
-    }
-
-    // Everything else: network only
-});
-
-// ── Message: allow page to force skip waiting ──────────────────────────────────
-self.addEventListener('message', event => {
-    if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+  }
 });
